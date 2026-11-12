@@ -167,6 +167,28 @@ class BrickwallLimiter(Plugin):
     sidechain detection for inter-sample peaks (true_peak=True).
     """
 
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply dense native curves; one real NumPy value per input audio frame."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
+
     def __init__(
         self,
         ceiling_db: float = -1.0,

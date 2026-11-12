@@ -405,3 +405,31 @@ inequality alone as a changed algorithm. Fixed settings should use the scalar pa
 to avoid dense curve copies/validation. Small caller audio chunks still require
 small zero-latency FFT processing; the curve path does not buffer extra audio to
 make those calls larger or add output latency.
+
+
+BrickwallLimiter controls
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``BrickwallLimiter`` accepts ``ceiling_db`` and ``release_ms`` curves. Ceiling
+values must produce a positive finite float32 linear gain; release values must
+be positive finite float32 values whose sample counts fit the native signed int.
+``lookahead_ms`` and ``true_peak`` remain scalar configuration.
+
+Unlike scalar setters, curve targets align with compensated output time: the
+complete ceiling/release configuration travels through a queue with the delayed
+audio. The original peak detector, gain envelope, hold and safety clip are retained.
+This does not add smoothing or a new true-peak guarantee. Scalar-only processing
+retains the original input-clock behavior; original scalar replay of curves must
+delay its parameter updates by the actual lookahead latency to match this path.
+
+Each curve still has one target per source input frame. With ``reset=False``,
+initial calls may return fewer frames or no frames; concatenate returned audio
+and supply zero input to drain outstanding latency. Pending targets survive
+subsequent scalar calls. Getters report the last consumed source targets, which
+may still be queued. ``reset=True`` automatically drains latency with silence
+and holds the last targets, returning the input frame count. Explicit reset,
+sample-rate/channel changes and structural configuration changes start a new
+history. Growing block sizes preserve the detector, delay and control queues by
+using bounded internal scratch. Scalar history is retained for a warm transition
+into automation. Curves omitted from a call hold their requested scalar values;
+all effective values are checked before DSP history changes.

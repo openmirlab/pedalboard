@@ -28,6 +28,7 @@ enum class DenseParameterDomain {
   Finite,
   ModulationRate,
   SignedUnitInterval,
+  LimiterCeiling,
   PhaserFrequency,
   Drive
 };
@@ -66,6 +67,10 @@ inline bool validDenseParameter(double original, float value,
   }
   case DenseParameterDomain::BitDepth:
     return original >= 0 && original <= 32;
+  case DenseParameterDomain::LimiterCeiling: {
+    const float gain = std::pow(10.0f, value / 20.0f);
+    return gain > 0 && std::isfinite(gain);
+  }
   case DenseParameterDomain::PhaserFrequency:
     return original > 0 && original < sampleRate * 0.5 && value > 0 &&
            value < sampleRate * 0.5;
@@ -112,23 +117,28 @@ struct DenseParameterControl {
 using DenseControlPreflight =
     std::function<void(const std::vector<DenseParameterControl> &)>;
 
+enum class DenseParameterLatency { Zero, Buffered };
+
 using DenseControlProcess =
     std::function<int(const juce::dsp::ProcessContextReplacing<float> &,
                       const std::vector<DenseParameterControl> &, size_t)>;
 
 // This private container makes the existing processing lock cover the child.
-// Only zero-latency effects are admitted by explicit bindings.
+// Buffered effects opt in explicitly and provide their own bulk frame
+// accounting.
 class DenseParameterProcessor : public PluginContainer {
 public:
-  DenseParameterProcessor(std::shared_ptr<Plugin> effect,
-                          std::vector<DenseParameterControl> controls,
-                          ChannelLayout layout, unsigned int channels,
-                          DenseControlPreflight preflight = {},
-                          std::function<void()> prepared = {},
-                          DenseControlProcess bulkProcess = {})
+  DenseParameterProcessor(
+      std::shared_ptr<Plugin> effect,
+      std::vector<DenseParameterControl> controls, ChannelLayout layout,
+      unsigned int channels, DenseControlPreflight preflight = {},
+      std::function<void()> prepared = {}, DenseControlProcess bulkProcess = {},
+      DenseParameterLatency latency = DenseParameterLatency::Zero,
+      bool allowTail = false)
       : PluginContainer({effect}), controls(std::move(controls)),
         preflight(std::move(preflight)), prepared(std::move(prepared)),
-        bulkProcess(std::move(bulkProcess)) {
+        bulkProcess(std::move(bulkProcess)), latency(latency),
+        allowTail(allowTail) {
     lastChannelLayout = layout;
     lastSpec.numChannels = channels;
   }
@@ -150,20 +160,28 @@ public:
     plugins.front()->reset();
   }
 
+  int getLatencyHint() override {
+    return latency == DenseParameterLatency::Buffered
+               ? plugins.front()->getLatencyHint()
+               : 0;
+  }
+
   int process(
       const juce::dsp::ProcessContextReplacing<float> &context) override {
     auto block = context.getOutputBlock();
     const size_t count = block.getNumSamples();
-    if (cursor + count > controls.front().values.size())
+    if (cursor + count > controls.front().values.size() &&
+        !(latency == DenseParameterLatency::Buffered && allowTail))
       throw std::runtime_error(
           "Automation consumed more frames than supplied.");
 
     if (bulkProcess) {
-      if (bulkProcess(context, controls, cursor) != (int)count)
-        throw std::runtime_error(
-            "Dense bulk processing requires a zero-latency effect.");
+      const int returned = bulkProcess(context, controls, cursor);
+      if (returned < 0 || returned > (int)count ||
+          (latency == DenseParameterLatency::Zero && returned != (int)count))
+        throw std::runtime_error("Invalid dense bulk output frame count.");
       cursor += count;
-      return (int)count;
+      return returned;
     }
     size_t start = 0;
     while (start < count) {
@@ -217,6 +235,8 @@ private:
   DenseControlPreflight preflight;
   std::function<void()> prepared;
   DenseControlProcess bulkProcess;
+  DenseParameterLatency latency;
+  bool allowTail;
   bool validated = false;
 };
 
@@ -244,15 +264,17 @@ using DenseParameterProcess =
 // The specification order defines simultaneous updates, independently of the
 // Python dict's insertion order. All controls validate before DSP mutation.
 template <typename Effect, typename... Options>
-void bindDenseParameters(py::class_<Effect, Options...> &binding,
-                         std::vector<DenseParameterSpec<Effect>> specs,
-                         DenseParameterPreflight<Effect> preflight = {},
-                         DenseParameterPrepared<Effect> prepared = {},
-                         DenseParameterProcess<Effect> bulkProcess = {}) {
-  auto callback = [specs, preflight, prepared,
-                   bulkProcess](std::shared_ptr<Effect> self, py::array input,
-                                double sampleRate, unsigned int bufferSize,
-                                bool reset, py::object automation) {
+void bindDenseParameters(
+    py::class_<Effect, Options...> &binding,
+    std::vector<DenseParameterSpec<Effect>> specs,
+    DenseParameterPreflight<Effect> preflight = {},
+    DenseParameterPrepared<Effect> prepared = {},
+    DenseParameterProcess<Effect> bulkProcess = {},
+    DenseParameterLatency latency = DenseParameterLatency::Zero) {
+  auto callback = [specs, preflight, prepared, bulkProcess,
+                   latency](std::shared_ptr<Effect> self, py::array input,
+                            double sampleRate, unsigned int bufferSize,
+                            bool reset, py::object automation) {
     if (automation.is_none())
       return process(input, sampleRate, {self}, bufferSize, reset);
     if (!py::isinstance<py::dict>(automation))
@@ -353,7 +375,7 @@ void bindDenseParameters(py::class_<Effect, Options...> &binding,
       };
     auto adapter = std::make_shared<DenseParameterProcessor>(
         self, std::move(controls), layout, channels, std::move(validation),
-        std::move(afterPrepare), std::move(bulk));
+        std::move(afterPrepare), std::move(bulk), latency, reset);
     return process(audio, sampleRate, {adapter}, bufferSize, reset);
   };
   for (const char *method : {"process", "__call__"})

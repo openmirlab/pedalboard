@@ -4,6 +4,7 @@ import numpy as np
 
 from pedalboard import (
     Bitcrush,
+    BrickwallLimiter,
     Chorus,
     Clipping,
     Compressor,
@@ -84,3 +85,6 @@ Convolution(np.ones(16, dtype=np.float32), sample_rate=48000).process(
 Convolution(np.ones(16, dtype=np.float32), sample_rate=48000)(
     audio, 48000, reset=False, automation={"mix": curve}
 )
+
+BrickwallLimiter().process(audio, 48000, automation={"ceiling_db": curve})
+BrickwallLimiter()(audio, 48000, reset=False, automation={"release_ms": np.ones(128)})
