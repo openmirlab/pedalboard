@@ -16,12 +16,40 @@
  */
 
 #include "../JucePlugin.h"
+#include "../parameter_automation.h"
 
 namespace Pedalboard {
 template <typename SampleType>
 class Delay : public JucePlugin<juce::dsp::DelayLine<
                   SampleType, juce::dsp::DelayLineInterpolationTypes::None>> {
 public:
+  void validateAutomation(const std::vector<DenseParameterControl> &controls,
+                          double rate) const {
+    // Both ring index sums (position + size - 1 and read + delay) use int.
+    if (!std::isfinite(rate) || rate <= 0 ||
+        MAXIMUM_DELAY_TIME_SECONDS * rate >
+            (std::numeric_limits<int>::max() - 1) / 2)
+      throw std::invalid_argument("Delay automation sample rate exceeds safe "
+                                  "native ring-buffer arithmetic.");
+    auto seconds = getDelaySeconds(), feedback = getFeedback(), mix = getMix();
+    for (const auto &control : controls) {
+      const float v = control.values.front();
+      if (control.name == "delay_seconds")
+        seconds = v;
+      else if (control.name == "feedback")
+        feedback = v;
+      else if (control.name == "mix")
+        mix = v;
+    }
+    if (!std::isfinite(seconds) || seconds < 0 ||
+        seconds > MAXIMUM_DELAY_TIME_SECONDS || !std::isfinite(feedback) ||
+        feedback < 0 || feedback > 1 || !std::isfinite(mix) || mix < 0 ||
+        mix > 1)
+      throw std::invalid_argument(
+          "Delay controls must be finite: delay_seconds in [0, 30], "
+          "feedback and mix in [0, 1].");
+  }
+
   SampleType getDelaySeconds() const { return delaySeconds; }
   void setDelaySeconds(const SampleType value) {
     if (value < 0.0 || value > MAXIMUM_DELAY_TIME_SECONDS) {
@@ -47,13 +75,12 @@ public:
 
   virtual void prepare(const juce::dsp::ProcessSpec &spec) override {
     if (this->lastSpec.sampleRate != spec.sampleRate ||
-        this->lastSpec.maximumBlockSize < spec.maximumBlockSize ||
         spec.numChannels != this->lastSpec.numChannels) {
       this->getDSP().setMaximumDelayInSamples(
           (int)(MAXIMUM_DELAY_TIME_SECONDS * spec.sampleRate));
       this->getDSP().prepare(spec);
-      this->lastSpec = spec;
     }
+    this->lastSpec = spec;
 
     this->getDSP().setDelay((int)(delaySeconds * spec.sampleRate));
   }
@@ -104,34 +131,47 @@ private:
 };
 
 inline void init_delay(py::module &m) {
-  py::class_<Delay<float>, Plugin, std::shared_ptr<Delay<float>>>(
-      m, "Delay",
-      "A digital delay plugin with controllable delay time, feedback "
-      "percentage, and dry/wet mix.")
-      .def(py::init([](float delaySeconds, float feedback, float mix) {
-             auto delay = std::make_unique<Delay<float>>();
-             delay->setDelaySeconds(delaySeconds);
-             delay->setFeedback(feedback);
-             delay->setMix(mix);
-             return delay;
-           }),
-           py::arg("delay_seconds") = 0.5, py::arg("feedback") = 0.0,
-           py::arg("mix") = 0.5)
-      .def("__repr__",
-           [](const Delay<float> &plugin) {
-             std::ostringstream ss;
-             ss << "<pedalboard.Delay";
-             ss << " delay_seconds=" << plugin.getDelaySeconds();
-             ss << " feedback=" << plugin.getFeedback();
-             ss << " mix=" << plugin.getMix();
-             ss << " at " << &plugin;
-             ss << ">";
-             return ss.str();
-           })
-      .def_property("delay_seconds", &Delay<float>::getDelaySeconds,
-                    &Delay<float>::setDelaySeconds)
-      .def_property("feedback", &Delay<float>::getFeedback,
-                    &Delay<float>::setFeedback)
-      .def_property("mix", &Delay<float>::getMix, &Delay<float>::setMix);
+  auto binding =
+      py::class_<Delay<float>, Plugin, std::shared_ptr<Delay<float>>>(
+          m, "Delay",
+          "A digital delay plugin with controllable delay time, feedback "
+          "percentage, and dry/wet mix.")
+          .def(py::init([](float delaySeconds, float feedback, float mix) {
+                 auto delay = std::make_unique<Delay<float>>();
+                 delay->setDelaySeconds(delaySeconds);
+                 delay->setFeedback(feedback);
+                 delay->setMix(mix);
+                 return delay;
+               }),
+               py::arg("delay_seconds") = 0.5, py::arg("feedback") = 0.0,
+               py::arg("mix") = 0.5)
+          .def("__repr__",
+               [](const Delay<float> &plugin) {
+                 std::ostringstream ss;
+                 ss << "<pedalboard.Delay";
+                 ss << " delay_seconds=" << plugin.getDelaySeconds();
+                 ss << " feedback=" << plugin.getFeedback();
+                 ss << " mix=" << plugin.getMix();
+                 ss << " at " << &plugin;
+                 ss << ">";
+                 return ss.str();
+               })
+          .def_property("delay_seconds", &Delay<float>::getDelaySeconds,
+                        &Delay<float>::setDelaySeconds)
+          .def_property("feedback", &Delay<float>::getFeedback,
+                        &Delay<float>::setFeedback)
+          .def_property("mix", &Delay<float>::getMix, &Delay<float>::setMix);
+  DenseParameterPreflight<Delay<float>> preflight =
+      [](const Delay<float> &effect,
+         const std::vector<DenseParameterControl> &controls, double rate,
+         unsigned int) { effect.validateAutomation(controls, rate); };
+  bindDenseParameters(
+      binding,
+      {{"delay_seconds", &Delay<float>::setDelaySeconds,
+        DenseParameterDomain::DelaySeconds},
+       {"feedback", &Delay<float>::setFeedback,
+        DenseParameterDomain::UnitInterval},
+       {"mix", &Delay<float>::setMix, DenseParameterDomain::UnitInterval}},
+      std::move(preflight));
 }
 }; // namespace Pedalboard

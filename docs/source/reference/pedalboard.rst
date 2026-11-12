@@ -245,3 +245,43 @@ controls (including omitted scalar values and fixed freeze mode) validate under
 the native processing lock. Existing scalar setter acceptance is unchanged.
 No clamping, additional smoothing or reverb algorithm is introduced. Fixed
 settings should use the scalar path to avoid curve validation/scheduling overhead.
+
+
+Delay controls
+~~~~~~~~~~~~~~
+
+``Delay`` accepts synchronized ``delay_seconds``, ``feedback`` and ``mix`` curves.
+Delay time must be finite in [0, 30] seconds; feedback and mix must be finite in
+[0, 1]. Targets retain float32 precision. All same-frame setters apply before
+processing, in constructor order (delay, feedback, mix), independently of dict order.
+Omitted scalar controls and rate safety validate under the processing lock before
+reset, preparation or target mutation.
+
+This remains the original integer digital delay: seconds are converted to float32,
+multiplied by the double-precision sample rate, then truncated to integer samples.
+For example, 0.01 seconds at 48 kHz maps to 479 samples because of the existing
+float32 rounding and truncation. No fractional interpolation, read-head crossfade
+or parameter smoothing is added. Rapid changes can skip/repeat stored samples and
+produce clicks or other time-varying artifacts; sample-position target delivery
+does not imply artifact-free delay-time modulation.
+
+Exactly zero seconds retains the original bypass: audio is returned unchanged,
+regardless of mix/feedback, and delay memory does not advance or record that input.
+Resuming a nonzero delay continues the paused memory. A nonzero sub-sample delay
+that truncates to zero is different: the original pop-before-push code reads an
+old slot, producing a full-ring delay, rather than the zero-second bypass. The ring
+length is max(4, int(30 * sample_rate) + 1). This behavior is preserved, not clamped.
+
+Mix is linear: dry gain is 1 - mix, wet gain is mix. Feedback sends delayed output
+back into the stored input. Feedback 1 remains allowed and can sustain repeats;
+input accumulation and arbitrary controls can still increase peaks. No limiter is
+added. Channels retain independent delay memory, including multichannel audio.
+
+``reset=False`` and block-size growth retain echo history. ``reset=True`` clears
+it; rate/channel changes still allocate and reset as before. Supply zero input to
+render the tail: no extra output frames are appended automatically. The curve path
+requires a positive finite rate with 30 * sample_rate <= (INT_MAX - 1) / 2 to keep
+the pinned JUCE int buffer/index arithmetic safe. This does not impose a memory
+budget; the original implementation allocates up to 30 seconds per channel even
+for short requested delays. Scalar setter acceptance is unchanged. Use the scalar
+path for fixed settings to avoid curve validation/scheduling overhead.

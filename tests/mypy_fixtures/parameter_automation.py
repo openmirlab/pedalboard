@@ -6,6 +6,7 @@ from pedalboard import (
     Bitcrush,
     Clipping,
     Compressor,
+    Delay,
     Distortion,
     Gain,
     HighpassFilter,
@@ -56,3 +57,6 @@ Reverb().process(audio, 48000, automation={"room_size": np.full(128, 0.8), "widt
 Reverb()(
     audio, 48000, reset=False, automation={"damping": curve, "wet_level": curve, "dry_level": curve}
 )
+
+Delay().process(audio, 48000, automation={"delay_seconds": np.full(128, 0.125), "feedback": curve})
+Delay()(audio, 48000, reset=False, automation={"mix": curve})
