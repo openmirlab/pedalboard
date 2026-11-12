@@ -18,242 +18,20 @@
 
 #include "../JuceHeader.h"
 #include "../Plugin.h"
-#include "../juce_overrides/juce_FastWindowedSincInterpolators.h"
+#include "../parameter_automation.h"
 #include "../plugins/AddLatency.h"
+#include "ClockedResample.h"
+#include "Resampling.h"
+#include <atomic>
 
 namespace Pedalboard {
-
-#include <variant>
-
-/**
- * The various levels of resampler quality available from JUCE.
- * More could be added here, but these should cover the vast
- * majority of use cases.
- */
-enum class ResamplingQuality {
-  // These types are the legacy JUCE versions, which all
-  // introduce aliasing when used for downsampling:
-  ZeroOrderHold = 0,
-  Linear = 1,
-  CatmullRom = 2,
-  Lagrange = 3,
-  WindowedSinc = 4,
-  // These resamplers are faster than the default WindowedSinc
-  // counterpart, and all properly handle downsampling without
-  // aliasing. They also include significant speedups for the cases
-  // in which the speed ratio is a nice fraction like 2/3 or 3/2.
-  WindowedSinc256 = 5,
-  WindowedSinc128 = 6,
-  WindowedSinc64 = 7,
-  WindowedSinc32 = 8, // This is the new default as of Pedalboard v0.9.15
-  WindowedSinc16 = 9,
-  WindowedSinc8 = 10,
-};
-
-/**
- * A wrapper class that allows changing the quality of a resampler,
- * as the JUCE GenericInterpolator implementations are each separate classes.
- */
-class VariableQualityResampler {
-public:
-  void setQuality(const ResamplingQuality newQuality) {
-    switch (newQuality) {
-    case ResamplingQuality::ZeroOrderHold:
-      interpolator = juce::Interpolators::ZeroOrderHold();
-      break;
-    case ResamplingQuality::Linear:
-      interpolator = juce::Interpolators::Linear();
-      break;
-    case ResamplingQuality::CatmullRom:
-      interpolator = juce::Interpolators::CatmullRom();
-      break;
-    case ResamplingQuality::Lagrange:
-      interpolator = juce::Interpolators::Lagrange();
-      break;
-    case ResamplingQuality::WindowedSinc:
-      interpolator = juce::Interpolators::WindowedSinc();
-      break;
-    case ResamplingQuality::WindowedSinc256:
-      interpolator = juce::FastInterpolators::WindowedSinc256();
-      break;
-    case ResamplingQuality::WindowedSinc128:
-      interpolator = juce::FastInterpolators::WindowedSinc128();
-      break;
-    case ResamplingQuality::WindowedSinc64:
-      interpolator = juce::FastInterpolators::WindowedSinc64();
-      break;
-    case ResamplingQuality::WindowedSinc32:
-      interpolator = juce::FastInterpolators::WindowedSinc32();
-      break;
-    case ResamplingQuality::WindowedSinc16:
-      interpolator = juce::FastInterpolators::WindowedSinc16();
-      break;
-    case ResamplingQuality::WindowedSinc8:
-      interpolator = juce::FastInterpolators::WindowedSinc8();
-      break;
-    default:
-      throw std::domain_error("Unknown resampler quality received!");
-    }
-  }
-
-  ResamplingQuality getQuality() const {
-    return (ResamplingQuality)interpolator.index();
-  }
-
-  float getBaseLatency() const {
-    // Unfortunately, std::visit cannot be used here due to macOS version
-    // issues: https://stackoverflow.com/q/52310835/679081
-    if (auto *i =
-            std::get_if<juce::Interpolators::ZeroOrderHold>(&interpolator)) {
-      return i->getBaseLatency();
-    } else if (auto *i =
-                   std::get_if<juce::Interpolators::Linear>(&interpolator)) {
-      return i->getBaseLatency();
-    } else if (auto *i = std::get_if<juce::Interpolators::CatmullRom>(
-                   &interpolator)) {
-      return i->getBaseLatency();
-    } else if (auto *i =
-                   std::get_if<juce::Interpolators::Lagrange>(&interpolator)) {
-      return i->getBaseLatency();
-    } else if (auto *i = std::get_if<juce::Interpolators::WindowedSinc>(
-                   &interpolator)) {
-      return i->getBaseLatency();
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc256>(
-                   &interpolator)) {
-      return i->getBaseLatency();
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc128>(
-                   &interpolator)) {
-      return i->getBaseLatency();
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc64>(
-                   &interpolator)) {
-      return i->getBaseLatency();
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc32>(
-                   &interpolator)) {
-      return i->getBaseLatency();
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc16>(
-                   &interpolator)) {
-      return i->getBaseLatency();
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc8>(
-                   &interpolator)) {
-      return i->getBaseLatency();
-    } else {
-      throw std::runtime_error("Unknown resampler quality!");
-    }
-  }
-
-  void reset() noexcept {
-    // Unfortunately, std::visit cannot be used here due to macOS version
-    // issues: https://stackoverflow.com/q/52310835/679081
-    if (auto *i =
-            std::get_if<juce::Interpolators::ZeroOrderHold>(&interpolator)) {
-      i->reset();
-    } else if (auto *i =
-                   std::get_if<juce::Interpolators::Linear>(&interpolator)) {
-      i->reset();
-    } else if (auto *i = std::get_if<juce::Interpolators::CatmullRom>(
-                   &interpolator)) {
-      i->reset();
-    } else if (auto *i =
-                   std::get_if<juce::Interpolators::Lagrange>(&interpolator)) {
-      i->reset();
-    } else if (auto *i = std::get_if<juce::Interpolators::WindowedSinc>(
-                   &interpolator)) {
-      i->reset();
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc256>(
-                   &interpolator)) {
-      i->reset();
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc128>(
-                   &interpolator)) {
-      i->reset();
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc64>(
-                   &interpolator)) {
-      i->reset();
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc32>(
-                   &interpolator)) {
-      i->reset();
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc16>(
-                   &interpolator)) {
-      i->reset();
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc8>(
-                   &interpolator)) {
-      i->reset();
-    } else {
-      throw std::runtime_error("Unknown resampler quality!");
-    }
-  }
-
-  int process(double speedRatio, const float *inputSamples,
-              float *outputSamples, int numOutputSamplesToProduce) noexcept {
-    // Unfortunately, std::visit cannot be used here due to macOS version
-    // issues: https://stackoverflow.com/q/52310835/679081
-    if (auto *i =
-            std::get_if<juce::Interpolators::ZeroOrderHold>(&interpolator)) {
-      return i->process(speedRatio, inputSamples, outputSamples,
-                        numOutputSamplesToProduce);
-    } else if (auto *i =
-                   std::get_if<juce::Interpolators::Linear>(&interpolator)) {
-      return i->process(speedRatio, inputSamples, outputSamples,
-                        numOutputSamplesToProduce);
-    } else if (auto *i = std::get_if<juce::Interpolators::CatmullRom>(
-                   &interpolator)) {
-      return i->process(speedRatio, inputSamples, outputSamples,
-                        numOutputSamplesToProduce);
-    } else if (auto *i =
-                   std::get_if<juce::Interpolators::Lagrange>(&interpolator)) {
-      return i->process(speedRatio, inputSamples, outputSamples,
-                        numOutputSamplesToProduce);
-    } else if (auto *i = std::get_if<juce::Interpolators::WindowedSinc>(
-                   &interpolator)) {
-      return i->process(speedRatio, inputSamples, outputSamples,
-                        numOutputSamplesToProduce);
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc256>(
-                   &interpolator)) {
-      return i->process(speedRatio, inputSamples, outputSamples,
-                        numOutputSamplesToProduce);
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc128>(
-                   &interpolator)) {
-      return i->process(speedRatio, inputSamples, outputSamples,
-                        numOutputSamplesToProduce);
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc64>(
-                   &interpolator)) {
-      return i->process(speedRatio, inputSamples, outputSamples,
-                        numOutputSamplesToProduce);
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc32>(
-                   &interpolator)) {
-      return i->process(speedRatio, inputSamples, outputSamples,
-                        numOutputSamplesToProduce);
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc16>(
-                   &interpolator)) {
-      return i->process(speedRatio, inputSamples, outputSamples,
-                        numOutputSamplesToProduce);
-    } else if (auto *i = std::get_if<juce::FastInterpolators::WindowedSinc8>(
-                   &interpolator)) {
-      return i->process(speedRatio, inputSamples, outputSamples,
-                        numOutputSamplesToProduce);
-    } else {
-      throw std::runtime_error("Unknown resampler quality!");
-    }
-  }
-
-private:
-  std::variant<juce::Interpolators::ZeroOrderHold, juce::Interpolators::Linear,
-               juce::Interpolators::CatmullRom, juce::Interpolators::Lagrange,
-               juce::Interpolators::WindowedSinc,
-               juce::FastInterpolators::WindowedSinc256,
-               juce::FastInterpolators::WindowedSinc128,
-               juce::FastInterpolators::WindowedSinc64,
-               juce::FastInterpolators::WindowedSinc32,
-               juce::FastInterpolators::WindowedSinc16,
-               juce::FastInterpolators::WindowedSinc8>
-      interpolator;
-};
 
 /**
  * A test plugin used to verify the behaviour of the ResamplingPlugin wrapper.
  */
 template <typename SampleType> class Passthrough : public Plugin {
 public:
-  virtual ~Passthrough(){};
+  virtual ~Passthrough() {};
 
   virtual void prepare(const juce::dsp::ProcessSpec &spec) {}
 
@@ -275,9 +53,50 @@ template <typename T = Passthrough<float>, typename SampleType = float,
           int DefaultSampleRate = 8000>
 class Resample : public Plugin {
 public:
-  virtual ~Resample(){};
+  void validateAutomation(const std::vector<DenseParameterControl> &controls,
+                          double rate) const {
+    if (!std::isfinite(rate) || rate < 1 || !std::isfinite((float)rate) ||
+        controls.front().values.size() + 65536 >= INT_MAX)
+      throw std::range_error("Unsafe Resample sample rate or frame count");
+    automationRequested = true;
+  }
+  void validateAutomationStream(bool reset) const {
+    if (!reset && scalarHasProcessed && !automationActive)
+      throw std::range_error("Start Resample automation with reset=True after "
+                             "scalar processing; latency timelines differ");
+  }
+  void beginAutomation() {
+    automationActive = true;
+    automationRequested = false;
+  }
+  int processAutomated(const juce::dsp::ProcessContextReplacing<float> &context,
+                       const std::vector<DenseParameterControl> &controls,
+                       size_t cursor) {
+    int result = clocked->process(context, &controls.front().values, cursor,
+                                  getTargetSampleRate());
+    const auto count = context.getOutputBlock().getNumSamples();
+    if (count)
+      setTargetSampleRate(controls.front().values[std::min(
+          cursor + count - 1, controls.front().values.size() - 1)]);
+    return result;
+  }
+  virtual ~Resample() {};
 
   virtual void prepare(const juce::dsp::ProcessSpec &spec) {
+    if (automationRequested || automationActive) {
+      const float target = getTargetSampleRate();
+      if (!std::isfinite(spec.sampleRate) || spec.sampleRate < 1 ||
+          !std::isfinite(target) || target < spec.sampleRate / 64.0 ||
+          target > spec.sampleRate)
+        throw std::range_error(
+            "Clocked Resample target must be in [sample_rate/64, sample_rate]");
+      if (!clocked)
+        clocked = std::make_unique<ClockedResample>();
+      clocked->prepare(spec, quality, getTargetSampleRate());
+      lastSpec = spec;
+      return;
+    }
+
     bool specChanged = lastSpec.sampleRate != spec.sampleRate ||
                        lastSpec.maximumBlockSize < spec.maximumBlockSize ||
                        lastSpec.numChannels != spec.numChannels;
@@ -334,6 +153,9 @@ public:
 
   int process(const juce::dsp::ProcessContextReplacing<SampleType> &context)
       override final {
+    if (automationActive)
+      return clocked->process(context, nullptr, 0, getTargetSampleRate());
+    scalarHasProcessed = true;
     auto ioBlock = context.getOutputBlock();
 
     float expectedResampledSamples = ioBlock.getNumSamples() / resamplerRatio;
@@ -526,6 +348,11 @@ public:
   T &getNestedPlugin() { return plugin; }
 
   virtual void reset() override final {
+    if (clocked)
+      clocked->invalidate();
+    automationActive = false;
+    scalarHasProcessed = false;
+
     plugin.reset();
 
     nativeToTargetResamplers.clear();
@@ -546,12 +373,18 @@ public:
   }
 
   virtual int getLatencyHint() override {
+    if (automationActive || automationRequested)
+      return clocked ? clocked->latency() : 0;
+
     return inStreamLatency + (plugin.getLatencyHint() * resamplerRatio);
   }
 
 private:
   T plugin;
-  float targetSampleRate = (float)DefaultSampleRate;
+  std::atomic<float> targetSampleRate{(float)DefaultSampleRate};
+  mutable bool automationRequested = false;
+  bool automationActive = false, scalarHasProcessed = false;
+  std::unique_ptr<ClockedResample> clocked;
   ResamplingQuality quality = ResamplingQuality::WindowedSinc32;
 
   double resamplerRatio = 1.0;
@@ -793,6 +626,24 @@ default from Pedalboard v0.9.15 onwards. (Previously, :py:class:`WindowedSinc` w
       .def_property("quality", &Resample<Passthrough<float>, float>::getQuality,
                     &Resample<Passthrough<float>, float>::setQuality,
                     "The resampling algorithm used to resample the audio.");
+  using Effect = Resample<Passthrough<float>, float>;
+  bindDenseParameters<Effect>(
+      resample,
+      {{"target_sample_rate",
+        [](auto &effect, float value) { effect.setTargetSampleRate(value); },
+        DenseParameterDomain::ResampleRate}},
+      [](const auto &effect, const auto &controls, double rate, unsigned int) {
+        effect.validateAutomation(controls, rate);
+      },
+      [](auto &effect) { effect.beginAutomation(); },
+      [](auto &effect, const auto &context, const auto &controls,
+         size_t cursor) {
+        return effect.processAutomated(context, controls, cursor);
+      },
+      DenseParameterLatency::Buffered,
+      [](const auto &effect, bool reset) {
+        effect.validateAutomationStream(reset);
+      });
 }
 
 /**

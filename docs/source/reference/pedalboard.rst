@@ -471,3 +471,62 @@ setup cost to reset renders; warm streaming retains the existing engine.
 Fixed pitch should use the scalar API. ``time_stretch`` remains
 a separate interface with its own processing, parameter resolution and duration
 contract; this feature does not change it.
+
+
+Resample controls
+~~~~~~~~~~~~~~~~~
+
+``Resample`` accepts ``automation={"target_sample_rate": curve}`` in physical Hz,
+with one float32 target per source input frame, shared across channels. Targets
+must be finite and in [sample_rate/64, sample_rate], including after conversion
+to float32. The sample rate passed to ``process`` is the fixed host rate, not a
+curve. All eleven existing ``quality`` choices remain available as fixed scalar
+configuration, with their original interpolation/filter arithmetic. No smoothing,
+new interpolation backend or quality automation is added.
+
+The curve path integrates targets on the source timeline and timestamps the virtual
+sampling events. Downsampling and reconstruction use that shared clock; changing
+the rate does not discard fractional phase or pending audio. Timestamped native
+and target rings are bounded for the validated ratio range. Blocks can grow or
+shrink without re-preparing filters. The original fractional latency-rounding
+phase convention is retained at initialization. Very small float32 differences
+from the scalar resampling partition can remain; this is not a new sound-quality
+or ideal reconstruction guarantee. Existing aliasing/filter behavior depends on
+``quality``, and abrupt rate changes can still produce the intended audible effect.
+
+Clocked processing has a fixed startup deficit ``L = 65 * B + 2`` frames, where
+``B`` is the interpolation mode's base latency:
+
+.. list-table:: Base latency used by clocked resampling
+   :header-rows: 1
+
+   * - Quality
+     - B
+   * - ZeroOrderHold
+     - 0
+   * - Linear
+     - 1
+   * - CatmullRom, Lagrange
+     - 2
+   * - WindowedSinc
+     - 100
+   * - WindowedSinc8/16/32/64/128/256
+     - 16/32/64/128/256/512
+
+For default WindowedSinc32, L=4162 (about86.7ms at48kHz). ``reset=True`` feeds final
+silence, holds the last target and compensates this delay, returning exactly the
+input frame count. ``reset=False`` initially returns fewer or zero frames; slice
+input and curves together, concatenate outputs and supply L zero frames to drain
+outstanding audio. Scalar ``reset=False`` calls after curve activation hold the
+requested rate using the same clock and pending history. Getters report the last
+consumed source target, which may still precede delayed output.
+
+Entering automation after already processing scalar audio requires ``reset=True``:
+the original scalar path has a different latency/state timeline. This is rejected
+before parameters or DSP history change when ``reset=False``. Starting a fresh
+object with curves and ``reset=False`` is supported. Explicit reset, format changes
+and quality changes clear the timeline; quality is not a seamless switching event.
+Requested scalar holds on an active clock must also stay within the curve range.
+A scalar restart retains the upstream wider rate range and processing behavior.
+``None``/``{}`` and fixed scalar processing retain that existing path when no
+clocked stream is active. No GSM controls or GSM automation are introduced.

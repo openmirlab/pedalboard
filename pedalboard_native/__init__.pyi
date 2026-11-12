@@ -2156,6 +2156,28 @@ class Resample(Plugin):
         This method can be more than 10x faster than Resampy's ``kaiser_fast`` method, and is useful for applications that are tolerant of some resampling artifacts.
         """
 
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply dense native curves; one real NumPy value per input audio frame."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
+
     def __init__(
         self, target_sample_rate: float = 8000.0, quality: Quality = Quality.WindowedSinc32
     ) -> None: ...

@@ -1,3 +1,4 @@
+#pragma once
 #include "../JuceHeader.h"
 
 inline double sinc(const double x) {
@@ -224,6 +225,14 @@ public:
               float *outputSamples, int numOutputSamplesToProduce) noexcept {
     return interpolate(speedRatio, inputSamples, outputSamples,
                        numOutputSamplesToProduce);
+  }
+
+  // Evaluate a timestamp chosen by the shared clock. Preserve filter history;
+  // only override the cursor that the scalar-ratio API would otherwise advance.
+  int processSampleAtCursor(double cursorPosition, double filterRatio,
+                            const float *input, float *output) noexcept {
+    subSamplePos = cursorPosition;
+    return interpolate(filterRatio, input, output, 1);
   }
 
 private:

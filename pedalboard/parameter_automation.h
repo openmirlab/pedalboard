@@ -30,6 +30,7 @@ enum class DenseParameterDomain {
   SignedUnitInterval,
   LimiterCeiling,
   PitchSemitones,
+  ResampleRate,
   PhaserFrequency,
   Drive
 };
@@ -68,6 +69,9 @@ inline bool validDenseParameter(double original, float value,
   }
   case DenseParameterDomain::BitDepth:
     return original >= 0 && original <= 32;
+  case DenseParameterDomain::ResampleRate:
+    return original >= sampleRate / 64.0 && original <= sampleRate &&
+           value >= sampleRate / 64.0 && value <= sampleRate;
   case DenseParameterDomain::PitchSemitones:
     return original >= -72 && original <= 72;
   case DenseParameterDomain::LimiterCeiling: {
@@ -273,11 +277,13 @@ void bindDenseParameters(
     DenseParameterPreflight<Effect> preflight = {},
     DenseParameterPrepared<Effect> prepared = {},
     DenseParameterProcess<Effect> bulkProcess = {},
-    DenseParameterLatency latency = DenseParameterLatency::Zero) {
-  auto callback = [specs, preflight, prepared, bulkProcess,
-                   latency](std::shared_ptr<Effect> self, py::array input,
-                            double sampleRate, unsigned int bufferSize,
-                            bool reset, py::object automation) {
+    DenseParameterLatency latency = DenseParameterLatency::Zero,
+    std::function<void(const Effect &, bool)> streamPreflight = {}) {
+  auto callback = [specs, preflight, prepared, bulkProcess, latency,
+                   streamPreflight](std::shared_ptr<Effect> self,
+                                    py::array input, double sampleRate,
+                                    unsigned int bufferSize, bool reset,
+                                    py::object automation) {
     if (automation.is_none())
       return process(input, sampleRate, {self}, bufferSize, reset);
     if (!py::isinstance<py::dict>(automation))
@@ -363,9 +369,13 @@ void bindDenseParameters(
     if (!frames || !channels)
       return process(audio, sampleRate, {}, bufferSize, false);
     DenseControlPreflight validation;
-    if (preflight)
-      validation = [self, sampleRate, channels, preflight](const auto &values) {
-        preflight(*self, values, sampleRate, (unsigned int)channels);
+    if (preflight || streamPreflight)
+      validation = [self, sampleRate, channels, preflight, streamPreflight,
+                    reset](const auto &values) {
+        if (streamPreflight)
+          streamPreflight(*self, reset);
+        if (preflight)
+          preflight(*self, values, sampleRate, (unsigned int)channels);
       };
     std::function<void()> afterPrepare;
     if (prepared)

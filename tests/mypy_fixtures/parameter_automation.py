@@ -22,6 +22,7 @@ from pedalboard import (
     PeakFilter,
     Phaser,
     PitchShift,
+    Resample,
     Reverb,
 )
 
@@ -92,3 +93,6 @@ BrickwallLimiter()(audio, 48000, reset=False, automation={"release_ms": np.ones(
 
 PitchShift().process(audio, 48000, automation={"semitones": curve})
 PitchShift()(audio, 48000, reset=False, automation={"semitones": curve})
+
+Resample().process(audio, 48000, automation={"target_sample_rate": np.full(128, 12000)})
+Resample()(audio, 48000, reset=False, automation={"target_sample_rate": np.full(128, 4000)})

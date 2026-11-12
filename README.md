@@ -5,7 +5,7 @@ Pedalboard effects. It is maintained by [OpenMIRLab](https://github.com/openmirl
 and builds on [Spotify's Pedalboard](https://github.com/spotify/pedalboard).
 The existing DSP algorithms and scalar processing API are retained.
 
-This development snapshot adds source-scheduled PitchShift automation on `feat/pitchshift-automation`;
+This development snapshot adds source-clocked Resample automation on `feat/resample-automation`;
 the source installation below selects this branch.
 
 ## Automation in this fork
@@ -28,6 +28,7 @@ the source installation below selects this branch.
 | `Convolution` | `mix` (fixed impulse response) |
 | `BrickwallLimiter` | `ceiling_db`, `release_ms` (fixed lookahead and detector) |
 | `PitchShift` | `semitones` (source time at the Rubber Band input) |
+| `Resample` | `target_sample_rate` (source-time clock; fixed `quality`) |
 
 Pass an `automation` dict to an effect's `process` or `__call__`. Each curve is a
 one-dimensional real NumPy array with one target per input audio frame, shared
@@ -78,7 +79,21 @@ PitchShift queues targets through its one-second priming delay, then applies the
 when corresponding source frames enter Rubber Band. Windowed pitch response is
 not an instantaneous sample-exact output transition. Short streaming calls retain
 the priming audio; block growth keeps the first prepared capacity and histories.
+Resample curves share a clock between downsampling and reconstruction, retaining
+all eleven interpolation choices. Curve rates are in `[sample_rate/64, sample_rate]`;
+the host rate stays fixed. The clocked path uses fixed compensated latency (4162
+frames for default WindowedSinc32); a warm scalar-to-curve transition requires
+`reset=True`. Once active, `reset=False` scalar calls hold the rate on that clock.
 Fixed parameters should use the existing scalar path.
+
+For example, with the mono audio and sample rate above:
+
+```python
+from pedalboard import Resample
+
+rate_curve = np.linspace(sample_rate / 2, sample_rate / 12, audio.size, dtype=np.float32)
+output = Resample()(audio, sample_rate, automation={"target_sample_rate": rate_curve})
+```
 
 See the [automation reference](docs/source/reference/pedalboard.rst) for accepted
 values, layouts, reset behavior and effect-specific limits. This interface targets
@@ -93,7 +108,7 @@ Installing `pedalboard` from PyPI installs the upstream distribution.
 A C++ toolchain is required. With [uv](https://docs.astral.sh/uv/) installed:
 
 ```shell
-git clone --branch feat/pitchshift-automation --recurse-submodules https://github.com/openmirlab/pedalboard.git
+git clone --branch feat/resample-automation --recurse-submodules https://github.com/openmirlab/pedalboard.git
 cd pedalboard
 uv venv --python 3.12
 uv pip install .
