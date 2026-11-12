@@ -5,6 +5,9 @@ Pedalboard effects. It is maintained by [OpenMIRLab](https://github.com/openmirl
 and builds on [Spotify's Pedalboard](https://github.com/spotify/pedalboard).
 The existing JUCE algorithms and scalar processing API are retained.
 
+This development snapshot adds Phaser automation on `feat/phaser-automation`;
+the source installation below selects this branch.
+
 ## Automation in this fork
 
 | Effects | Supported curve parameters |
@@ -21,6 +24,7 @@ The existing JUCE algorithms and scalar processing API are retained.
 | `Reverb` | `room_size`, `damping`, `wet_level`, `dry_level`, `width` |
 | `Delay` | `delay_seconds`, `feedback`, `mix` |
 | `Chorus` | `rate_hz`, `depth`, `centre_delay_ms`, `feedback`, `mix` |
+| `Phaser` | `rate_hz`, `depth`, `centre_frequency_hz`, `feedback`, `mix` |
 
 Pass an `automation` dict to an effect's `process` or `__call__`. Each curve is a
 one-dimensional real NumPy array with one target per input audio frame, shared
@@ -58,6 +62,8 @@ Delay retains the original integer read-head updates and linear mix, without
 new smoothing; fast delay-time changes can produce read-head artifacts.
 Chorus keeps its original LFO phase and native smoothing; bounded scratch
 processing preserves history when blocks grow.
+Phaser retains its original four-frame frequency-update clock and 50 ms ramps;
+the dense path also refreshes centre-frequency mapping after format preparation.
 Fixed parameters should use the existing scalar path.
 
 See the [automation reference](docs/source/reference/pedalboard.rst) for accepted
@@ -73,7 +79,7 @@ Installing `pedalboard` from PyPI installs the upstream distribution.
 A C++ toolchain is required. With [uv](https://docs.astral.sh/uv/) installed:
 
 ```shell
-git clone --branch main --recurse-submodules https://github.com/openmirlab/pedalboard.git
+git clone --branch feat/phaser-automation --recurse-submodules https://github.com/openmirlab/pedalboard.git
 cd pedalboard
 uv venv --python 3.12
 uv pip install .

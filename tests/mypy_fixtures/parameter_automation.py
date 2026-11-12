@@ -18,6 +18,7 @@ from pedalboard import (
     LowShelfFilter,
     NoiseGate,
     PeakFilter,
+    Phaser,
     Reverb,
 )
 
@@ -68,3 +69,10 @@ Chorus().process(
     automation={"rate_hz": np.ones(128), "depth": curve, "centre_delay_ms": np.full(128, 8)},
 )
 Chorus()(audio, 48000, reset=False, automation={"feedback": curve, "mix": curve})
+
+Phaser().process(
+    audio,
+    48000,
+    automation={"rate_hz": np.ones(128), "depth": curve, "centre_frequency_hz": np.full(128, 1300)},
+)
+Phaser()(audio, 48000, reset=False, automation={"feedback": curve, "mix": curve})

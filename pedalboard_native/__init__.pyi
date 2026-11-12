@@ -1386,6 +1386,28 @@ class Phaser(Plugin):
     A 6 stage phaser that modulates first order all-pass filters to create sweeping notches in the magnitude frequency response. This audio effect can be controlled with standard phaser parameters: the speed and depth of the LFO controlling the frequency response, a mix control, a feedback control, and the centre frequency of the modulation.
     """
 
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply synchronized dense parameter targets, retaining DSP state on reset=False."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
+
     def __init__(
         self,
         rate_hz: float = 1.0,

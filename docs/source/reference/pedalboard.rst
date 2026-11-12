@@ -323,3 +323,46 @@ allocation/index sums must fit native ints. These are format/arithmetic limits,
 not a memory budget. Fixed settings should use the scalar path to avoid curve
 validation/scheduling overhead. Numerical parity does not guarantee that extreme
 feedback or modulation settings are musically appropriate.
+
+
+Phaser controls
+~~~~~~~~~~~~~~~
+
+``Phaser`` accepts synchronized ``rate_hz``, ``depth``, ``centre_frequency_hz``,
+``feedback`` and ``mix`` curves. Rates must be finite in [0, 100] Hz, depth/mix
+finite in [0, 1], feedback finite in [-1, 1]. Centre targets must remain finite,
+positive float32 and strictly below the current Nyquist frequency. The native
+modulated frequency retains its logarithmic mapping/clamp to
+[20, min(20000, 0.49 * sample_rate)] Hz. The getter retains the requested centre.
+All supplied same-frame targets apply before audio in constructor order, independent
+of dict order. Omitted scalars and format limits validate under the processing lock
+before reset, preparation or parameter changes. Scalar setter acceptance is unchanged.
+
+The six original all-pass stages and shared LFO are retained. The LFO and filter
+frequency update every four audio frames; frequency/depth smoothers advance on
+that clock. Feedback and linear dry/wet gains advance at audio rate. All retain
+JUCE's original 50 ms ramps. A centre target between frequency ticks can wait up
+to three frames; a short pulse that returns before the next tick can have no audible
+frequency effect. Native target delivery does not bypass this cadence or promise
+instantaneous audible response. No new smoothing or phase-widening mode is added.
+
+``reset=False`` and block-size growth preserve LFO phase, the four-frame update
+counter, filter memory, feedback output and smoother progress. Phaser and Chorus
+share fixed 1024-frame DSP scratch preparation and internally bounded processing.
+Rate/channel changes and ``reset=True`` retain the original reset/smoother behavior.
+The curve path requires a finite sample rate >= 400 Hz to bound the downsampled
+oscillator's phase wrapping; its float32 clock and 50 ms native int step counts
+must be representable. Fixed settings should use the scalar path to avoid curve
+validation/scheduling overhead.
+
+There is one explicit initialization correction in the dense path. Original JUCE
+normalizes centre frequency using the DSP rate at setter time, then changes rate
+in prepare without recomputing that mapping. On cold 22.05/32 kHz renders this can
+leave a constructor-rate mapping until centre is assigned again. The curve path
+reapplies the effective centre after preparation, including omitted scalar centre,
+so requested Hz and continuation do not depend on chunking. Original comparisons
+at these rates prepare the format and reapply centre explicitly before processing.
+No-automation calls (including None/empty automation) retain the legacy mapping;
+prepare the scalar effect at the new rate then reassign centre when needed. This
+correction makes cold dense and legacy scalar output intentionally differ at low
+rates; at 44.1/48/96 kHz the original normalization range is already the same.

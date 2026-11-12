@@ -31,7 +31,8 @@ namespace Pedalboard {
 #define CHORUS_MAX_RATE_HZ 100
 
 template <typename SampleType>
-class Chorus : public JucePlugin<juce::dsp::Chorus<SampleType>> {
+class Chorus
+    : public FixedBlockJucePlugin<juce::dsp::Chorus<SampleType>, SampleType> {
 public:
   void validateAutomation(const std::vector<DenseParameterControl> &controls,
                           double rate) const {
@@ -63,7 +64,7 @@ public:
         mix = v;
     }
     if (!validDenseParameter(frequency, frequency,
-                             DenseParameterDomain::ChorusRate, rate) ||
+                             DenseParameterDomain::ModulationRate, rate) ||
         !validDenseParameter(depth, depth, DenseParameterDomain::UnitInterval,
                              rate) ||
         !std::isfinite(centre) ||
@@ -73,36 +74,6 @@ public:
                              rate))
       throw std::invalid_argument("Invalid effective Chorus controls.");
   }
-
-  void prepare(const juce::dsp::ProcessSpec &spec) override {
-    if (this->lastSpec.sampleRate != spec.sampleRate ||
-        this->lastSpec.numChannels != spec.numChannels) {
-      auto boundedSpec = spec;
-      boundedSpec.maximumBlockSize = scratchFrames;
-      JucePlugin<juce::dsp::Chorus<SampleType>>::prepare(boundedSpec);
-    }
-    this->lastSpec = spec;
-  }
-
-  int process(
-      const juce::dsp::ProcessContextReplacing<SampleType> &context) override {
-    auto block = context.getOutputBlock();
-    for (size_t start = 0; start < block.getNumSamples();
-         start += scratchFrames) {
-      auto span =
-          block.getSubBlock(start, std::min((size_t)scratchFrames,
-                                            block.getNumSamples() - start));
-      juce::dsp::ProcessContextReplacing<SampleType> boundedContext(span);
-      boundedContext.isBypassed = context.isBypassed;
-      this->getDSP().process(boundedContext);
-    }
-    return (int)block.getNumSamples();
-  }
-
-private:
-  // Chorus owns several private block-sized buffers. Keep their prepared
-  // capacity fixed; larger calls reuse them without clearing phase or echoes.
-  static constexpr unsigned int scratchFrames = 1024;
 
   DEFINE_DSP_SETTER_AND_GETTER(SampleType, Rate, {
     if (value < CHORUS_MIN_RATE_HZ || value > CHORUS_MAX_RATE_HZ) {
@@ -182,7 +153,8 @@ inline void init_chorus(py::module &m) {
          unsigned int) { effect.validateAutomation(controls, rate); };
   bindDenseParameters(
       binding,
-      {{"rate_hz", &Chorus<float>::setRate, DenseParameterDomain::ChorusRate},
+      {{"rate_hz", &Chorus<float>::setRate,
+        DenseParameterDomain::ModulationRate},
        {"depth", &Chorus<float>::setDepth, DenseParameterDomain::UnitInterval},
        {"centre_delay_ms", &Chorus<float>::setCentreDelay,
         DenseParameterDomain::Finite},

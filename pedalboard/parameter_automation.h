@@ -26,8 +26,9 @@ enum class DenseParameterDomain {
   UnitInterval,
   DelaySeconds,
   Finite,
-  ChorusRate,
+  ModulationRate,
   SignedUnitInterval,
+  PhaserFrequency,
   Drive
 };
 
@@ -65,9 +66,12 @@ inline bool validDenseParameter(double original, float value,
   }
   case DenseParameterDomain::BitDepth:
     return original >= 0 && original <= 32;
+  case DenseParameterDomain::PhaserFrequency:
+    return original > 0 && original < sampleRate * 0.5 && value > 0 &&
+           value < sampleRate * 0.5;
   case DenseParameterDomain::Finite:
     return true;
-  case DenseParameterDomain::ChorusRate:
+  case DenseParameterDomain::ModulationRate:
     return original >= 0 && original <= 100;
   case DenseParameterDomain::SignedUnitInterval:
     return original >= -1 && original <= 1;
@@ -115,9 +119,10 @@ public:
   DenseParameterProcessor(std::shared_ptr<Plugin> effect,
                           std::vector<DenseParameterControl> controls,
                           ChannelLayout layout, unsigned int channels,
-                          DenseControlPreflight preflight = {})
+                          DenseControlPreflight preflight = {},
+                          std::function<void()> prepared = {})
       : PluginContainer({effect}), controls(std::move(controls)),
-        preflight(std::move(preflight)) {
+        preflight(std::move(preflight)), prepared(std::move(prepared)) {
     lastChannelLayout = layout;
     lastSpec.numChannels = channels;
   }
@@ -126,6 +131,8 @@ public:
     validateOnce();
     applyControls(0);
     plugins.front()->prepare(spec);
+    if (prepared)
+      prepared();
     lastSpec = spec;
   }
 
@@ -195,6 +202,7 @@ private:
   std::vector<DenseParameterControl> controls;
   size_t cursor = 0;
   DenseControlPreflight preflight;
+  std::function<void()> prepared;
   bool validated = false;
 };
 
@@ -210,16 +218,20 @@ using DenseParameterPreflight =
                        const std::vector<DenseParameterControl> &, double,
                        unsigned int)>;
 
+template <typename Effect>
+using DenseParameterPrepared = std::function<void(Effect &)>;
+
 // The specification order defines simultaneous updates, independently of the
 // Python dict's insertion order. All controls validate before DSP mutation.
 template <typename Effect, typename... Options>
 void bindDenseParameters(py::class_<Effect, Options...> &binding,
                          std::vector<DenseParameterSpec<Effect>> specs,
-                         DenseParameterPreflight<Effect> preflight = {}) {
-  auto callback = [specs, preflight](std::shared_ptr<Effect> self,
-                                     py::array input, double sampleRate,
-                                     unsigned int bufferSize, bool reset,
-                                     py::object automation) {
+                         DenseParameterPreflight<Effect> preflight = {},
+                         DenseParameterPrepared<Effect> prepared = {}) {
+  auto callback = [specs, preflight,
+                   prepared](std::shared_ptr<Effect> self, py::array input,
+                             double sampleRate, unsigned int bufferSize,
+                             bool reset, py::object automation) {
     if (automation.is_none())
       return process(input, sampleRate, {self}, bufferSize, reset);
     if (!py::isinstance<py::dict>(automation))
@@ -309,8 +321,12 @@ void bindDenseParameters(py::class_<Effect, Options...> &binding,
       validation = [self, sampleRate, channels, preflight](const auto &values) {
         preflight(*self, values, sampleRate, (unsigned int)channels);
       };
+    std::function<void()> afterPrepare;
+    if (prepared)
+      afterPrepare = [self, prepared] { prepared(*self); };
     auto adapter = std::make_shared<DenseParameterProcessor>(
-        self, std::move(controls), layout, channels, std::move(validation));
+        self, std::move(controls), layout, channels, std::move(validation),
+        std::move(afterPrepare));
     return process(audio, sampleRate, {adapter}, bufferSize, reset);
   };
   for (const char *method : {"process", "__call__"})
