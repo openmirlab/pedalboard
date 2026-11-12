@@ -5,9 +5,6 @@ Pedalboard effects. It is maintained by [OpenMIRLab](https://github.com/openmirl
 and builds on [Spotify's Pedalboard](https://github.com/spotify/pedalboard).
 The existing JUCE algorithms and scalar processing API are retained.
 
-This development snapshot adds Chorus automation on `feat/chorus-automation`;
-the source installation below selects this branch.
-
 ## Automation in this fork
 
 | Effects | Supported curve parameters |
@@ -76,7 +73,7 @@ Installing `pedalboard` from PyPI installs the upstream distribution.
 A C++ toolchain is required. With [uv](https://docs.astral.sh/uv/) installed:
 
 ```shell
-git clone --branch feat/chorus-automation --recurse-submodules https://github.com/openmirlab/pedalboard.git
+git clone --branch main --recurse-submodules https://github.com/openmirlab/pedalboard.git
 cd pedalboard
 uv venv --python 3.12
 uv pip install .
