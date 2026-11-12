@@ -39,7 +39,7 @@ inline int process(juce::AudioBuffer<float> &ioBuffer,
   for (auto plugin : plugins) {
     if (!plugin)
       continue;
-    expectedOutputLatency += plugin->getLatencyHint();
+    expectedOutputLatency += processingPlugin(plugin.get())->getLatencyHint();
   }
 
   int intendedOutputBufferSize = ioBuffer.getNumSamples();
@@ -78,7 +78,7 @@ inline int process(juce::AudioBuffer<float> &ioBuffer,
           blockStart, blockSize);
       juce::dsp::ProcessContextReplacing<float> context(ioBlock);
 
-      int outputSamples = plugin->process(context);
+      int outputSamples = processingPlugin(plugin.get())->process(context);
       if (outputSamples < 0) {
         throw std::runtime_error(
             "A plugin returned a negative number of output samples! "
@@ -250,7 +250,7 @@ processFloat32(const py::array_t<float, py::array::c_style> inputArray,
       for (auto plugin : plugins) {
         if (!plugin)
           continue;
-        plugin->reset();
+        processingPlugin(plugin.get())->reset();
       }
     }
 
@@ -262,7 +262,7 @@ processFloat32(const py::array_t<float, py::array::c_style> inputArray,
     for (auto plugin : plugins) {
       if (!plugin)
         continue;
-      plugin->prepare(spec);
+      processingPlugin(plugin.get())->prepare(spec);
     }
 
     // Actually run the process method of all plugins.

@@ -32,20 +32,34 @@ public:
   Mix(std::vector<std::shared_ptr<Plugin>> plugins)
       : PluginContainer(plugins), pluginBuffers(plugins.size()),
         samplesAvailablePerPlugin(plugins.size()) {}
-  virtual ~Mix(){};
+  virtual ~Mix() {};
 
   virtual void prepare(const juce::dsp::ProcessSpec &spec) {
+    automationResetReady = false;
     for (auto plugin : plugins) {
       if (plugin) {
-        plugin->prepare(spec);
+        processingPlugin(plugin.get())->prepare(spec);
       }
     }
 
+    // List edits are legal between renders. Reset branch queues when the list
+    // or audio format changes, but preserve them across ordinary prepare calls.
+    std::vector<const Plugin *> identities;
+    for (const auto &plugin : plugins)
+      identities.push_back(plugin.get());
+    if (identities != preparedPlugins ||
+        spec.sampleRate != lastSpec.sampleRate ||
+        spec.numChannels != lastSpec.numChannels) {
+      pluginBuffers.clear();
+      pluginBuffers.resize(plugins.size());
+      samplesAvailablePerPlugin.assign(plugins.size(), 0);
+      preparedPlugins = std::move(identities);
+    }
     int maximumBufferSize = getLatencyHint() + spec.maximumBlockSize;
     for (auto &buffer : pluginBuffers)
-      buffer.setSize(spec.numChannels, maximumBufferSize);
-    for (int i = 0; i < samplesAvailablePerPlugin.size(); i++)
-      samplesAvailablePerPlugin[i] = 0;
+      buffer.setSize(spec.numChannels,
+                     std::max(maximumBufferSize, buffer.getNumSamples()), true,
+                     true);
     lastSpec = spec;
   }
 
@@ -62,7 +76,7 @@ public:
       // If we don't have enough space, reallocate. (Reluctantly. This is the
       // "audio thread!")
       if (endInBuffer > buffer.getNumSamples()) {
-        buffer.setSize(buffer.getNumChannels(), endInBuffer);
+        buffer.setSize(buffer.getNumChannels(), endInBuffer, true, true);
       }
 
       // Copy the audio input into each of these buffers:
@@ -82,7 +96,7 @@ public:
       int samplesRendered = subBlock.getNumSamples();
 
       if (plugin) {
-        samplesRendered = plugin->process(subContext);
+        samplesRendered = processingPlugin(plugin.get())->process(subContext);
       }
       samplesAvailablePerPlugin[i] += samplesRendered;
 
@@ -143,21 +157,29 @@ public:
   }
 
   virtual void reset() {
+    // A render transaction preserves only its root's new session. Resetting
+    // a nested container must discard that container's earlier session.
+    if (nativeProcessingRoot != this)
+      automationState.reset();
+    automationResetReady = true;
     for (auto plugin : plugins) {
       if (plugin) {
-        plugin->reset();
+        processingPlugin(plugin.get())->reset();
       }
     }
 
-    for (auto buffer : pluginBuffers)
+    for (auto &buffer : pluginBuffers)
       buffer.clear();
+    std::fill(samplesAvailablePerPlugin.begin(),
+              samplesAvailablePerPlugin.end(), 0);
   }
 
   virtual int getLatencyHint() {
     int maxHint = 0;
     for (auto plugin : plugins) {
       if (plugin) {
-        maxHint = std::max(maxHint, plugin->getLatencyHint());
+        maxHint =
+            std::max(maxHint, processingPlugin(plugin.get())->getLatencyHint());
       }
     }
     return maxHint;
@@ -166,6 +188,7 @@ public:
 protected:
   std::vector<juce::AudioBuffer<float>> pluginBuffers;
   std::vector<int> samplesAvailablePerPlugin;
+  std::vector<const Plugin *> preparedPlugins;
 };
 
 inline void init_mix(py::module &m) {

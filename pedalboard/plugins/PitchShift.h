@@ -167,6 +167,8 @@ public:
     if (!std::isfinite(rate) || rate < 1 || rate > INT_MAX / 128 ||
         controls.front().values.size() + rate * 128 >= INT_MAX)
       throw std::range_error("Unsafe PitchShift sample rate or frame count");
+  }
+  void requestAutomation(const std::vector<DenseParameterControl> &controls) {
     const auto &values = controls.front().values;
     automationPending_ = true;
     incomingVaries_ =
@@ -234,6 +236,9 @@ inline void init_pitch_shift(py::module &m) {
          size_t cursor) {
         return effect.processAutomated(context, controls, cursor);
       },
-      DenseParameterLatency::Buffered);
+      DenseParameterLatency::Buffered, {},
+      [](auto &effect, const auto &controls) {
+        effect.requestAutomation(controls);
+      });
 }
 }; // namespace Pedalboard

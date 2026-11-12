@@ -20,6 +20,7 @@
 #include "BufferUtils.h"
 #include "JuceHeader.h"
 #include <mutex>
+#include <unordered_map>
 
 static constexpr int DEFAULT_BUFFER_SIZE = 8192;
 
@@ -29,7 +30,7 @@ namespace Pedalboard {
  */
 class Plugin {
 public:
-  virtual ~Plugin(){};
+  virtual ~Plugin() {};
 
   /**
    * Prepare the data structures that will be necessary for this plugin to
@@ -126,5 +127,38 @@ public:
 protected:
   juce::dsp::ProcessSpec lastSpec = {0};
   std::optional<ChannelLayout> lastChannelLayout = {};
+};
+// A scoped, thread-local render route. Ordinary processing takes only the null
+// branch; no Python callbacks or graph lookup occur on the scalar path.
+using NativeProcessingRoutes = std::unordered_map<const Plugin *, Plugin *>;
+inline thread_local const NativeProcessingRoutes *nativeProcessingRoutes =
+    nullptr;
+inline thread_local const Plugin *nativeProcessingRoot = nullptr;
+
+inline Plugin *processingPlugin(Plugin *plugin) {
+  if (nativeProcessingRoutes) {
+    auto found = nativeProcessingRoutes->find(plugin);
+    if (found != nativeProcessingRoutes->end())
+      return found->second;
+  }
+  return plugin;
+}
+
+class ScopedProcessingRoutes {
+public:
+  ScopedProcessingRoutes(const NativeProcessingRoutes &routes,
+                         const Plugin *root)
+      : previous(nativeProcessingRoutes), previousRoot(nativeProcessingRoot) {
+    nativeProcessingRoutes = &routes;
+    nativeProcessingRoot = root;
+  }
+  ~ScopedProcessingRoutes() {
+    nativeProcessingRoutes = previous;
+    nativeProcessingRoot = previousRoot;
+  }
+
+private:
+  const NativeProcessingRoutes *previous;
+  const Plugin *previousRoot;
 };
 } // namespace Pedalboard

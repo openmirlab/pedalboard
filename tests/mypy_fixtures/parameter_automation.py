@@ -5,6 +5,7 @@ import numpy as np
 from pedalboard import (
     Bitcrush,
     BrickwallLimiter,
+    Chain,
     Chorus,
     Clipping,
     Compressor,
@@ -18,8 +19,10 @@ from pedalboard import (
     Limiter,
     LowpassFilter,
     LowShelfFilter,
+    Mix,
     NoiseGate,
     PeakFilter,
+    Pedalboard,
     Phaser,
     PitchShift,
     Resample,
@@ -96,3 +99,14 @@ PitchShift()(audio, 48000, reset=False, automation={"semitones": curve})
 
 Resample().process(audio, 48000, automation={"target_sample_rate": np.full(128, 12000)})
 Resample()(audio, 48000, reset=False, automation={"target_sample_rate": np.full(128, 4000)})
+
+
+gain, lowpass = Gain(), LowpassFilter()
+board = Pedalboard([gain, Mix([Chain([lowpass]), Gain()])])
+board(
+    audio,
+    48000,
+    automation={gain: {"gain_db": curve}, lowpass: {"cutoff_frequency_hz": np.full(128, 800)}},
+)
+Chain([gain]).process(audio, 48000, automation={gain: {"gain_db": curve}})
+Mix([gain])(audio, 48000, automation={gain: {"gain_db": curve}})
