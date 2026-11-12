@@ -21,10 +21,47 @@
 namespace py = pybind11;
 
 #include "../JucePlugin.h"
+#include "../parameter_automation.h"
 
 namespace Pedalboard {
 template <typename SampleType>
 class LadderFilter : public JucePlugin<juce::dsp::LadderFilter<SampleType>> {
+public:
+  void prepare(const juce::dsp::ProcessSpec &spec) override {
+    // State and smoothers are channel-sized; block growth needs no reset.
+    this->prepareWithoutBlockSizeReset(spec);
+  }
+
+  void validateAutomation(const std::vector<DenseParameterControl> &controls,
+                          double sampleRate) const {
+    const float rate = (float)sampleRate;
+    if (!(std::isfinite(rate) && rate > 0) ||
+        std::floor((double)rate * 0.05) > std::numeric_limits<int>::max())
+      throw std::invalid_argument(
+          "Ladder curves require a positive finite "
+          "float32 rate with a representable 50ms ramp.");
+    float cutoff = getCutoffFrequencyHz(), resonance = getResonance(),
+          drive = getDrive();
+    // Supplied curves were checked in full; include omitted scalar settings
+    // under the native processing lock before any reset or target update.
+    for (const auto &control : controls) {
+      if (control.name == "cutoff_hz")
+        cutoff = control.values.front();
+      else if (control.name == "resonance")
+        resonance = control.values.front();
+      else if (control.name == "drive")
+        drive = control.values.front();
+    }
+    if (!validDenseParameter(cutoff, cutoff, DenseParameterDomain::Positive,
+                             sampleRate) ||
+        !validDenseParameter(resonance, resonance,
+                             DenseParameterDomain::UnitInterval, sampleRate) ||
+        !validDenseParameter(drive, drive, DenseParameterDomain::Drive,
+                             sampleRate))
+      throw std::invalid_argument("Ladder controls require positive cutoff, "
+                                  "resonance in [0, 1] and finite drive >= 1.");
+  }
+
   DEFINE_DSP_SETTER_AND_GETTER(SampleType, CutoffFrequencyHz, {});
   DEFINE_DSP_SETTER_AND_GETTER(SampleType, Drive, {
     if (value < 1.0) {
@@ -149,6 +186,17 @@ inline void init_ladderfilter(py::module &m) {
                     &LadderFilter<float>::setResonance)
       .def_property("drive", &LadderFilter<float>::getDrive,
                     &LadderFilter<float>::setDrive);
-  ;
+  DenseParameterPreflight<LadderFilter<float>> preflight =
+      [](const LadderFilter<float> &effect,
+         const std::vector<DenseParameterControl> &controls,
+         double rate) { effect.validateAutomation(controls, rate); };
+  bindDenseParameters(
+      ladderFilter,
+      {{"cutoff_hz", &LadderFilter<float>::setCutoffFrequencyHz,
+        DenseParameterDomain::Positive},
+       {"resonance", &LadderFilter<float>::setResonance,
+        DenseParameterDomain::UnitInterval},
+       {"drive", &LadderFilter<float>::setDrive, DenseParameterDomain::Drive}},
+      std::move(preflight));
 }
 }; // namespace Pedalboard

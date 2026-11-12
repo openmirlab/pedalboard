@@ -180,3 +180,32 @@ Static coefficient stability does not guarantee that arbitrary fast modulation
 is free of transients, level growth or other audible artifacts. Q and boosts can
 increase peaks substantially. Fixed controls should use the existing scalar path;
 curves intentionally add validation and scheduling work.
+
+
+Ladder filter controls
+~~~~~~~~~~~~~~~~~~~~~~
+
+``LadderFilter`` accepts ``cutoff_hz``, ``resonance`` and ``drive`` curves with
+all six fixed modes (LPF12/LPF24, HPF12/HPF24, BPF12/BPF24). Mode remains a scalar
+architecture choice: changing it keeps the original JUCE state-reset behavior,
+and a ``mode`` curve is rejected.
+
+Targets arrive before their input frame. JUCE's existing 50 ms linear ramps on
+the transformed cutoff and scaled resonance remain active; delivering a new Hz
+or resonance target is not a promise of an instantaneous audible change. Drive
+is a unitless multiplier, not dB, and retains the existing immediate saturation
+and gain compensation. No additional smoothing or new filter algorithm is added.
+
+Curve cutoff must be finite positive float32, resonance must be finite in [0, 1],
+and drive finite and at least 1. The original cutoff mapping has no Nyquist clamp;
+these are distinct validation rules from the first-order filters. The curve path
+also requires a positive finite float32 sample rate whose 50 ms smoother length
+fits a native int. Omitted scalar controls are validated under the processing
+lock before reset, preparation or parameter changes. Scalar setter acceptance
+is unchanged.
+
+``reset=False`` preserves both nonlinear filter history and smoother progress;
+block-size growth alone also preserves them. Rate/channel changes still prepare
+the DSP. High resonance can self-oscillate, and higher drive intentionally adds
+saturation; numerical parity does not imply every extreme setting is musically
+appropriate. Fixed controls should use the existing scalar path.

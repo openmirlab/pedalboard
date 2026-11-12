@@ -22,7 +22,9 @@ enum class DenseParameterDomain {
   TimeMilliseconds,
   CutoffFrequency,
   Positive,
-  EQGain
+  EQGain,
+  UnitInterval,
+  Drive
 };
 
 inline bool validDenseParameter(double original, float value,
@@ -59,7 +61,10 @@ inline bool validDenseParameter(double original, float value,
   }
   case DenseParameterDomain::BitDepth:
     return original >= 0 && original <= 32;
+  case DenseParameterDomain::UnitInterval:
+    return original >= 0 && original <= 1;
   case DenseParameterDomain::Ratio:
+  case DenseParameterDomain::Drive:
     return original >= 1;
   case DenseParameterDomain::TimeMilliseconds:
     return original >= 0;

@@ -10,6 +10,7 @@ from pedalboard import (
     Gain,
     HighpassFilter,
     HighShelfFilter,
+    LadderFilter,
     Limiter,
     LowpassFilter,
     LowShelfFilter,
@@ -39,3 +40,13 @@ PeakFilter()(
 )
 LowShelfFilter().process(audio, 48000, reset=False, automation={"gain_db": curve})
 HighShelfFilter()(audio, 48000, automation={"q": np.ones(128)})
+
+LadderFilter(mode=LadderFilter.LPF24).process(
+    audio,
+    48000,
+    automation={
+        "cutoff_hz": np.full(128, 1000),
+        "resonance": np.full(128, 0.5),
+        "drive": np.ones(128),
+    },
+)

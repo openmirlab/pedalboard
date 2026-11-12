@@ -12,7 +12,7 @@ the FreeType/X11 development libraries used by JUCE; consult the platform packag
 lists in `.github/workflows/all.yml` and `pyproject.toml` for build dependencies.
 
 ```shell
-git clone --branch main --recurse-submodules https://github.com/openmirlab/pedalboard.git
+git clone --branch feat/ladder-automation --recurse-submodules https://github.com/openmirlab/pedalboard.git
 cd pedalboard
 uv venv --python 3.12
 uv pip install -e '.[test]' ruff clang-format
@@ -21,7 +21,7 @@ uv pip install -e '.[test]' ruff clang-format
 Run the focused automation checks:
 
 ```shell
-uv run --no-project pytest tests/test_parameter_automation.py tests/test_dynamics_automation.py tests/test_filter_automation.py tests/test_eq_automation.py -q
+uv run --no-project pytest tests/test_parameter_automation.py tests/test_dynamics_automation.py tests/test_filter_automation.py tests/test_eq_automation.py tests/test_ladder_automation.py -q
 ```
 
 Run the related existing tests for filters, small buffers, locks, containers,
