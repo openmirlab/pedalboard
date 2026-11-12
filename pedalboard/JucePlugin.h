@@ -67,10 +67,12 @@ public:
   void reset() override { dspBlock.reset(); }
 
   DSPType &getDSP() { return dspBlock; };
+  const DSPType &getDSP() const { return dspBlock; };
 
 protected:
-  // Opt in only when DSP state is channel-sized and prepare() would reset it.
-  // A larger audio block alone then needs no reallocation or reinitialization.
+  // Opt in only when DSP has no block-sized scratch and prepare() would reset
+  // it. A larger audio block alone then needs no reallocation or
+  // reinitialization.
   void prepareWithoutBlockSizeReset(const juce::dsp::ProcessSpec &spec) {
     if (lastSpec.sampleRate != spec.sampleRate ||
         spec.numChannels != lastSpec.numChannels)

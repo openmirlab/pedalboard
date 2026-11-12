@@ -207,8 +207,8 @@ template <typename Effect, typename... Options>
 void bindEQAutomation(py::class_<Effect, Options...> &binding) {
   DenseParameterPreflight<Effect> preflight =
       [](const Effect &effect,
-         const std::vector<DenseParameterControl> &controls,
-         double rate) { effect.validateAutomation(controls, rate); };
+         const std::vector<DenseParameterControl> &controls, double rate,
+         unsigned int) { effect.validateAutomation(controls, rate); };
   bindDenseParameters(
       binding,
       {{"cutoff_frequency_hz", &Effect::setAutomatedCutoffFrequencyHz,

@@ -5,6 +5,9 @@ Pedalboard effects. It is maintained by [OpenMIRLab](https://github.com/openmirl
 and builds on [Spotify's Pedalboard](https://github.com/spotify/pedalboard).
 The existing JUCE algorithms and scalar processing API are retained.
 
+This development snapshot adds Reverb automation on `feat/reverb-automation`;
+the source installation below selects this branch.
+
 ## Automation in this fork
 
 | Effects | Supported curve parameters |
@@ -18,6 +21,7 @@ The existing JUCE algorithms and scalar processing API are retained.
 | `LowpassFilter`, `HighpassFilter` | `cutoff_frequency_hz` |
 | `PeakFilter`, `LowShelfFilter`, `HighShelfFilter` | `cutoff_frequency_hz`, `gain_db`, `q` |
 | `LadderFilter` | `cutoff_hz`, `resonance`, `drive` |
+| `Reverb` | `room_size`, `damping`, `wet_level`, `dry_level`, `width` |
 
 Pass an `automation` dict to an effect's `process` or `__call__`. Each curve is a
 one-dimensional real NumPy array with one target per input audio frame, shared
@@ -49,6 +53,8 @@ filters and dynamics retain processing memory when only the block size grows.
 EQ curves also receive joint coefficient validation before parameters or DSP
 history change. LadderFilter retains JUCE's original 50 ms cutoff/resonance
 smoothing and immediate drive control; its six modes remain fixed scalar choices.
+Reverb retains its original 10 ms smoothers and delay tails on control changes
+and block-size growth; `freeze_mode` remains scalar.
 Fixed parameters should use the existing scalar path.
 
 See the [automation reference](docs/source/reference/pedalboard.rst) for accepted
@@ -64,7 +70,7 @@ Installing `pedalboard` from PyPI installs the upstream distribution.
 A C++ toolchain is required. With [uv](https://docs.astral.sh/uv/) installed:
 
 ```shell
-git clone --branch main --recurse-submodules https://github.com/openmirlab/pedalboard.git
+git clone --branch feat/reverb-automation --recurse-submodules https://github.com/openmirlab/pedalboard.git
 cd pedalboard
 uv venv --python 3.12
 uv pip install .

@@ -188,8 +188,8 @@ inline void init_ladderfilter(py::module &m) {
                     &LadderFilter<float>::setDrive);
   DenseParameterPreflight<LadderFilter<float>> preflight =
       [](const LadderFilter<float> &effect,
-         const std::vector<DenseParameterControl> &controls,
-         double rate) { effect.validateAutomation(controls, rate); };
+         const std::vector<DenseParameterControl> &controls, double rate,
+         unsigned int) { effect.validateAutomation(controls, rate); };
   bindDenseParameters(
       ladderFilter,
       {{"cutoff_hz", &LadderFilter<float>::setCutoffFrequencyHz,

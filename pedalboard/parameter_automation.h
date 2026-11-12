@@ -193,8 +193,10 @@ template <typename Effect> struct DenseParameterSpec {
 };
 
 template <typename Effect>
-using DenseParameterPreflight = std::function<void(
-    const Effect &, const std::vector<DenseParameterControl> &, double)>;
+using DenseParameterPreflight =
+    std::function<void(const Effect &,
+                       const std::vector<DenseParameterControl> &, double,
+                       unsigned int)>;
 
 // The specification order defines simultaneous updates, independently of the
 // Python dict's insertion order. All controls validate before DSP mutation.
@@ -292,8 +294,8 @@ void bindDenseParameters(py::class_<Effect, Options...> &binding,
       return process(audio, sampleRate, {}, bufferSize, false);
     DenseControlPreflight validation;
     if (preflight)
-      validation = [self, sampleRate, preflight](const auto &values) {
-        preflight(*self, values, sampleRate);
+      validation = [self, sampleRate, channels, preflight](const auto &values) {
+        preflight(*self, values, sampleRate, (unsigned int)channels);
       };
     auto adapter = std::make_shared<DenseParameterProcessor>(
         self, std::move(controls), layout, channels, std::move(validation));

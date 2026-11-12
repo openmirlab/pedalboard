@@ -16,6 +16,7 @@ from pedalboard import (
     LowShelfFilter,
     NoiseGate,
     PeakFilter,
+    Reverb,
 )
 
 audio = np.ones((2, 128), dtype=np.float32)
@@ -49,4 +50,9 @@ LadderFilter(mode=LadderFilter.LPF24).process(
         "resonance": np.full(128, 0.5),
         "drive": np.ones(128),
     },
+)
+
+Reverb().process(audio, 48000, automation={"room_size": np.full(128, 0.8), "width": curve})
+Reverb()(
+    audio, 48000, reset=False, automation={"damping": curve, "wet_level": curve, "dry_level": curve}
 )

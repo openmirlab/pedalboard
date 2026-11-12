@@ -209,3 +209,39 @@ block-size growth alone also preserves them. Rate/channel changes still prepare
 the DSP. High resonance can self-oscillate, and higher drive intentionally adds
 saturation; numerical parity does not imply every extreme setting is musically
 appropriate. Fixed controls should use the existing scalar path.
+
+
+Reverb controls
+~~~~~~~~~~~~~~~
+
+``Reverb`` accepts synchronized ``room_size``, ``damping``, ``wet_level``,
+``dry_level`` and ``width`` curves. All must be finite in [0, 1]. ``freeze_mode``
+remains a scalar setting and cannot be supplied as a curve. The algorithm and
+its 10 ms linear damping, feedback and gain ramps remain unchanged. Room size
+sets feedback/decay rather than physically resizing the delay lines. Damping
+controls high-frequency decay. Wet and dry levels retain JUCE's existing gain
+scaling; width changes the stereo wet mix. In the pinned JUCE mono path, only the
+first wet gain is used, so width also changes mono wet level.
+
+All targets at a frame are applied before its audio, in the original constructor
+setter order: room size, damping, wet level, dry level, width. The order is
+independent of dict insertion order. In particular, wet level and width share
+smoothed gain targets; the original intermediate setter updates are preserved
+rather than batched into one JUCE parameter update. Target timing is not a promise
+of instantaneous audible response.
+
+``reset=False`` retains delay-line memory and running ramps. Block-size growth
+alone also retains them, including on scalar calls. ``reset=True`` clears the
+reverb buffers but retains the original running smoothers; it does not snap them
+to their targets. Rate/channel changes still prepare the DSP, clear buffers and
+reset smoothers as before. Supply zero-valued input with ``reset=False`` to render
+a tail; the automation call returns one output frame per input frame and does
+not append an unbounded tail automatically.
+
+The curve path requires mono or stereo audio and a sample rate in
+[196, 1309442) Hz, the safe range for the pinned JUCE integer delay-buffer
+calculation. Before reset, preparation or target changes, format and all effective
+controls (including omitted scalar values and fixed freeze mode) validate under
+the native processing lock. Existing scalar setter acceptance is unchanged.
+No clamping, additional smoothing or reverb algorithm is introduced. Fixed
+settings should use the scalar path to avoid curve validation/scheduling overhead.
