@@ -5,8 +5,7 @@ Pedalboard effects. It is maintained by [OpenMIRLab](https://github.com/openmirl
 and builds on [Spotify's Pedalboard](https://github.com/spotify/pedalboard).
 The existing DSP algorithms and scalar processing API are retained.
 
-This development snapshot adds source-clocked Resample automation on `feat/resample-automation`;
-the source installation below selects this branch.
+Native NumPy curves are available for the 21 selected built-in effects listed below.
 
 ## Automation in this fork
 
@@ -108,7 +107,7 @@ Installing `pedalboard` from PyPI installs the upstream distribution.
 A C++ toolchain is required. With [uv](https://docs.astral.sh/uv/) installed:
 
 ```shell
-git clone --branch feat/resample-automation --recurse-submodules https://github.com/openmirlab/pedalboard.git
+git clone --branch main --recurse-submodules https://github.com/openmirlab/pedalboard.git
 cd pedalboard
 uv venv --python 3.12
 uv pip install .
