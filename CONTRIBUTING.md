@@ -12,7 +12,7 @@ the FreeType/X11 development libraries used by JUCE; consult the platform packag
 lists in `.github/workflows/all.yml` and `pyproject.toml` for build dependencies.
 
 ```shell
-git clone --branch feat/reverb-automation --recurse-submodules https://github.com/openmirlab/pedalboard.git
+git clone --branch main --recurse-submodules https://github.com/openmirlab/pedalboard.git
 cd pedalboard
 uv venv --python 3.12
 uv pip install -e '.[test]' ruff clang-format
