@@ -41,3 +41,49 @@ The following documentation lists all of the available types of :class:`Plugin`.
    :imported-members:
    :inherited-members:
    :special-members: __call__
+
+Native parameter curves
+-----------------------
+
+This fork adds an optional keyword-only ``automation`` argument to ``process``
+and ``__call__`` on these four effects:
+
+================== ==================
+Effect             Parameter
+================== ==================
+``Gain``           ``gain_db``
+``Clipping``       ``threshold_db``
+``Distortion``     ``drive_db``
+``Bitcrush``       ``bit_depth``
+================== ==================
+
+For mono or planar audio (channels, frames), an example gain ramp is::
+
+    import numpy as np
+    from pedalboard import Gain
+
+    curve = np.linspace(-18, 0, audio.shape[-1], dtype=np.float32)
+    output = Gain().process(
+        audio, sample_rate, automation={"gain_db": curve}
+    )
+
+Each curve must be a one-dimensional real NumPy array containing one target
+value per input audio frame, shared by all channels. Float64 and integer curves
+are converted to the effects' float32 parameter precision. Noncontiguous and
+read-only arrays are accepted. Curves are validated and copied into native
+storage before processing; input audio and control arrays are not modified.
+
+Targets use the existing parameter units and are applied before their input
+frame is processed. No additional interpolation or smoothing is introduced.
+The final consumed value remains on the effect for subsequent scalar calls.
+Empty audio with empty curves leaves the parameter unchanged. ``bit_depth``
+accepts fractional values in [0, 32]. The dB controls accept negative infinity
+as silence; NaN, positive infinity and values that overflow native gains are
+rejected before DSP parameters change.
+
+For successive audio chunks, pass matching curve slices and ``reset=False``.
+The usual audio-layout detection rules still apply: establish the channel layout
+with an unambiguous block before tiny or square multichannel fragments.
+Omit ``automation`` (or pass ``None`` or an empty dict) to use the existing
+scalar processing path. Supplying curves to a whole ``Pedalboard``/``Chain``/
+``Mix``, other builtin effects or external plugins is outside this first batch.

@@ -21,6 +21,7 @@
 namespace py = pybind11;
 
 #include "../JucePlugin.h"
+#include "../parameter_automation.h"
 
 namespace Pedalboard {
 template <typename SampleType>
@@ -29,28 +30,35 @@ class Gain : public JucePlugin<juce::dsp::Gain<SampleType>> {
 };
 
 inline void init_gain(py::module &m) {
-  py::class_<Gain<float>, Plugin, std::shared_ptr<Gain<float>>>(
-      m, "Gain",
-      "A gain plugin that increases or decreases the volume of a signal by "
-      "amplifying or attenuating it by the provided value (in decibels). No "
-      "distortion or other effects are applied.\n\nThink of this as a volume "
-      "control.")
-      .def(py::init([](float gaindB) {
-             auto plugin = std::make_unique<Gain<float>>();
-             plugin->setGainDecibels(gaindB);
-             return plugin;
-           }),
-           py::arg("gain_db") = 1.0)
-      .def("__repr__",
-           [](const Gain<float> &plugin) {
-             std::ostringstream ss;
-             ss << "<pedalboard.Gain";
-             ss << " gain_db=" << plugin.getGainDecibels();
-             ss << " at " << &plugin;
-             ss << ">";
-             return ss.str();
-           })
-      .def_property("gain_db", &Gain<float>::getGainDecibels,
-                    &Gain<float>::setGainDecibels);
+  auto binding =
+      py::class_<Gain<float>, Plugin, std::shared_ptr<Gain<float>>>(
+          m, "Gain",
+          "A gain plugin that increases or decreases the volume of a signal by "
+          "amplifying or attenuating it by the provided value (in decibels). "
+          "No "
+          "distortion or other effects are applied.\n\nThink of this as a "
+          "volume "
+          "control.")
+          .def(py::init([](float gaindB) {
+                 auto plugin = std::make_unique<Gain<float>>();
+                 plugin->setGainDecibels(gaindB);
+                 return plugin;
+               }),
+               py::arg("gain_db") = 1.0)
+          .def("__repr__",
+               [](const Gain<float> &plugin) {
+                 std::ostringstream ss;
+                 ss << "<pedalboard.Gain";
+                 ss << " gain_db=" << plugin.getGainDecibels();
+                 ss << " at " << &plugin;
+                 ss << ">";
+                 return ss.str();
+               })
+          .def_property("gain_db", &Gain<float>::getGainDecibels,
+                        &Gain<float>::setGainDecibels);
+  bindDenseParameter(
+      binding, "gain_db",
+      [](Gain<float> &effect, float value) { effect.setGainDecibels(value); },
+      true);
 }
 }; // namespace Pedalboard

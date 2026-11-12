@@ -16,6 +16,7 @@
  */
 
 #include "../JucePlugin.h"
+#include "../parameter_automation.h"
 #include <cmath>
 
 namespace Pedalboard {
@@ -37,9 +38,14 @@ public:
     bitDepth = value;
   };
 
+  void setAutomatedBitDepth(SampleType value) {
+    setBitDepth(value);
+    updateScale();
+  }
+
   virtual void prepare(const juce::dsp::ProcessSpec &spec) override {
-    scaleFactor = pow(2, bitDepth);
-    inverseScaleFactor = 1.0 / scaleFactor;
+    updateScale();
+    lastSpec = spec;
   }
   virtual void reset() override {}
 
@@ -73,6 +79,11 @@ public:
   }
 
 private:
+  void updateScale() {
+    scaleFactor = pow(2, bitDepth);
+    inverseScaleFactor = 1.0 / scaleFactor;
+  }
+
   SampleType bitDepth = 8.0f;
 
   SampleType scaleFactor = 1.0f;
@@ -82,38 +93,51 @@ private:
 };
 
 inline void init_bitcrush(py::module &m) {
-  py::class_<Bitcrush<float>, Plugin, std::shared_ptr<Bitcrush<float>>>(
-      m, "Bitcrush",
-      "A plugin that reduces the signal to a given bit depth, giving the audio "
-      "a lo-fi, digitized sound. Floating-point bit depths are "
-      "supported.\n\nBitcrushing changes the amount of \"vertical\" resolution "
-      "used for an audio signal (i.e.: how many unique values could be used to "
-      "represent each sample). For an effect that changes the \"horizontal\" "
-      "resolution (i.e.: how many samples are available per second), see "
-      ":class:`pedalboard.Resample`.")
-      .def(py::init([](float bitDepth) {
-             auto bitcrush = std::make_unique<Bitcrush<float>>();
-             bitcrush->setBitDepth(bitDepth);
-             return bitcrush;
-           }),
-           py::arg("bit_depth") = 8)
-      .def("__repr__",
-           [](const Bitcrush<float> &plugin) {
-             std::ostringstream ss;
-             ss << "<pedalboard.Bitcrush";
-             ss << " bit_depth=" << plugin.getBitDepth();
-             ss << " at " << &plugin;
-             ss << ">";
-             return ss.str();
-           })
-      .def_property(
-          "bit_depth", &Bitcrush<float>::getBitDepth,
-          &Bitcrush<float>::setBitDepth,
-          "The bit depth to quantize the signal to. Must be "
-          "between " TO_STRING(BITCRUSH_MIN_BIT_DEPTH) " and " TO_STRING(
-              BITCRUSH_MAX_BIT_DEPTH) " bits. May be an integer, decimal, or "
-                                      "floating-point value. Each audio "
-                                      "sample will be quantized onto ``2 ** "
-                                      "bit_depth`` values.");
+  auto binding =
+      py::class_<Bitcrush<float>, Plugin, std::shared_ptr<Bitcrush<float>>>(
+          m, "Bitcrush",
+          "A plugin that reduces the signal to a given bit depth, giving the "
+          "audio "
+          "a lo-fi, digitized sound. Floating-point bit depths are "
+          "supported.\n\nBitcrushing changes the amount of \"vertical\" "
+          "resolution "
+          "used for an audio signal (i.e.: how many unique values could be "
+          "used to "
+          "represent each sample). For an effect that changes the "
+          "\"horizontal\" "
+          "resolution (i.e.: how many samples are available per second), see "
+          ":class:`pedalboard.Resample`.")
+          .def(py::init([](float bitDepth) {
+                 auto bitcrush = std::make_unique<Bitcrush<float>>();
+                 bitcrush->setBitDepth(bitDepth);
+                 return bitcrush;
+               }),
+               py::arg("bit_depth") = 8)
+          .def("__repr__",
+               [](const Bitcrush<float> &plugin) {
+                 std::ostringstream ss;
+                 ss << "<pedalboard.Bitcrush";
+                 ss << " bit_depth=" << plugin.getBitDepth();
+                 ss << " at " << &plugin;
+                 ss << ">";
+                 return ss.str();
+               })
+          .def_property(
+              "bit_depth", &Bitcrush<float>::getBitDepth,
+              &Bitcrush<float>::setBitDepth,
+              "The bit depth to quantize the signal to. Must be "
+              "between " TO_STRING(BITCRUSH_MIN_BIT_DEPTH) " and " TO_STRING(
+                  BITCRUSH_MAX_BIT_DEPTH) " bits. May be an integer, decimal, "
+                                          "or "
+                                          "floating-point value. Each audio "
+                                          "sample will be quantized onto ``2 "
+                                          "** "
+                                          "bit_depth`` values.");
+  bindDenseParameter(
+      binding, "bit_depth",
+      [](Bitcrush<float> &effect, float value) {
+        effect.setAutomatedBitDepth(value);
+      },
+      false);
 }
 }; // namespace Pedalboard

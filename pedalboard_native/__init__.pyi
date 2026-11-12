@@ -28,7 +28,7 @@ typing.overload = patch_overload
 
 from enum import Enum
 import threading
-from numpy import ndarray, float32
+from numpy import ndarray, float32, float64
 from numpy.typing import NDArray
 
 
@@ -215,6 +215,28 @@ class Bitcrush(Plugin):
     Bitcrushing changes the amount of "vertical" resolution used for an audio signal (i.e.: how many unique values could be used to represent each sample). For an effect that changes the "horizontal" resolution (i.e.: how many samples are available per second), see :class:`pedalboard.Resample`.
     """
 
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply dense native curves; one real NumPy value per input audio frame."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
+
     def __init__(self, bit_depth: float = 8) -> None: ...
     def __repr__(self) -> str: ...
     @property
@@ -301,6 +323,28 @@ class Clipping(Plugin):
     """
     A distortion plugin that adds hard distortion to the signal by clipping the signal at the provided threshold (in decibels).
     """
+
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply dense native curves; one real NumPy value per input audio frame."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
 
     def __init__(self, threshold_db: float = -6.0) -> None: ...
     def __repr__(self) -> str: ...
@@ -438,6 +482,28 @@ class Distortion(Plugin):
 
     This plugin produces a signal that is roughly equivalent to running: ``def distortion(x): return tanh(x * db_to_gain(drive_db))``
     """
+
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply dense native curves; one real NumPy value per input audio frame."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
 
     def __init__(self, drive_db: float = 25) -> None: ...
     def __repr__(self) -> str: ...
@@ -714,6 +780,28 @@ class Gain(Plugin):
 
     Think of this as a volume control.
     """
+
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply dense native curves; one real NumPy value per input audio frame."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
 
     def __init__(self, gain_db: float = 1.0) -> None: ...
     def __repr__(self) -> str: ...

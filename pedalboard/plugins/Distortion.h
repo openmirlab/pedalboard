@@ -21,6 +21,7 @@
 namespace py = pybind11;
 
 #include "../JucePlugin.h"
+#include "../parameter_automation.h"
 
 namespace Pedalboard {
 template <typename SampleType>
@@ -30,6 +31,11 @@ class Distortion
 public:
   void setDriveDecibels(const float f) noexcept { driveDecibels = f; }
   float getDriveDecibels() const noexcept { return driveDecibels; }
+
+  void setAutomatedDriveDecibels(float value) noexcept {
+    setDriveDecibels(value);
+    this->getDSP().template get<gainIndex>().setGainDecibels(value);
+  }
 
   virtual void prepare(const juce::dsp::ProcessSpec &spec) override {
     JucePlugin<juce::dsp::ProcessorChain<juce::dsp::Gain<SampleType>,
@@ -48,29 +54,37 @@ private:
 };
 
 inline void init_distortion(py::module &m) {
-  py::class_<Distortion<float>, Plugin, std::shared_ptr<Distortion<float>>>(
-      m, "Distortion",
-      "A distortion effect, which applies a non-linear (``tanh``, or "
-      "hyperbolic tangent) waveshaping function to apply harmonically pleasing "
-      "distortion to a signal.\n\nThis plugin produces a signal that is "
-      "roughly equivalent to running: ``def distortion(x): return tanh(x * "
-      "db_to_gain(drive_db))``")
-      .def(py::init([](float drive_db) {
-             auto plugin = std::make_unique<Distortion<float>>();
-             plugin->setDriveDecibels(drive_db);
-             return plugin;
-           }),
-           py::arg("drive_db") = 25)
-      .def("__repr__",
-           [](const Distortion<float> &plugin) {
-             std::ostringstream ss;
-             ss << "<pedalboard.Distortion";
-             ss << " drive_db=" << plugin.getDriveDecibels();
-             ss << " at " << &plugin;
-             ss << ">";
-             return ss.str();
-           })
-      .def_property("drive_db", &Distortion<float>::getDriveDecibels,
-                    &Distortion<float>::setDriveDecibels);
+  auto binding =
+      py::class_<Distortion<float>, Plugin, std::shared_ptr<Distortion<float>>>(
+          m, "Distortion",
+          "A distortion effect, which applies a non-linear (``tanh``, or "
+          "hyperbolic tangent) waveshaping function to apply harmonically "
+          "pleasing "
+          "distortion to a signal.\n\nThis plugin produces a signal that is "
+          "roughly equivalent to running: ``def distortion(x): return tanh(x * "
+          "db_to_gain(drive_db))``")
+          .def(py::init([](float drive_db) {
+                 auto plugin = std::make_unique<Distortion<float>>();
+                 plugin->setDriveDecibels(drive_db);
+                 return plugin;
+               }),
+               py::arg("drive_db") = 25)
+          .def("__repr__",
+               [](const Distortion<float> &plugin) {
+                 std::ostringstream ss;
+                 ss << "<pedalboard.Distortion";
+                 ss << " drive_db=" << plugin.getDriveDecibels();
+                 ss << " at " << &plugin;
+                 ss << ">";
+                 return ss.str();
+               })
+          .def_property("drive_db", &Distortion<float>::getDriveDecibels,
+                        &Distortion<float>::setDriveDecibels);
+  bindDenseParameter(
+      binding, "drive_db",
+      [](Distortion<float> &effect, float value) {
+        effect.setAutomatedDriveDecibels(value);
+      },
+      true);
 }
 }; // namespace Pedalboard

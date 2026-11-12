@@ -21,6 +21,7 @@
 namespace py = pybind11;
 
 #include "../JucePlugin.h"
+#include "../parameter_automation.h"
 
 namespace Pedalboard {
 template <typename SampleType> class Clipping : public Plugin {
@@ -34,7 +35,7 @@ public:
 
   float getThresholdDecibels() const noexcept { return thresholdDecibels; }
 
-  virtual void prepare(const juce::dsp::ProcessSpec &spec) {}
+  virtual void prepare(const juce::dsp::ProcessSpec &spec) { lastSpec = spec; }
 
   virtual int process(
       const juce::dsp::ProcessContextReplacing<SampleType> &context) override {
@@ -61,26 +62,33 @@ private:
 };
 
 inline void init_clipping(py::module &m) {
-  py::class_<Clipping<float>, Plugin, std::shared_ptr<Clipping<float>>>(
-      m, "Clipping",
-      "A distortion plugin that adds hard distortion to the signal "
-      "by clipping the signal at the provided threshold (in decibels).")
-      .def(py::init([](float thresholdDb) {
-             auto plugin = std::make_unique<Clipping<float>>();
-             plugin->setThresholdDecibels(thresholdDb);
-             return plugin;
-           }),
-           py::arg("threshold_db") = -6.0)
-      .def("__repr__",
-           [](const Clipping<float> &plugin) {
-             std::ostringstream ss;
-             ss << "<pedalboard.Clipping";
-             ss << " threshold_db=" << plugin.getThresholdDecibels();
-             ss << " at " << &plugin;
-             ss << ">";
-             return ss.str();
-           })
-      .def_property("threshold_db", &Clipping<float>::getThresholdDecibels,
-                    &Clipping<float>::setThresholdDecibels);
+  auto binding =
+      py::class_<Clipping<float>, Plugin, std::shared_ptr<Clipping<float>>>(
+          m, "Clipping",
+          "A distortion plugin that adds hard distortion to the signal "
+          "by clipping the signal at the provided threshold (in decibels).")
+          .def(py::init([](float thresholdDb) {
+                 auto plugin = std::make_unique<Clipping<float>>();
+                 plugin->setThresholdDecibels(thresholdDb);
+                 return plugin;
+               }),
+               py::arg("threshold_db") = -6.0)
+          .def("__repr__",
+               [](const Clipping<float> &plugin) {
+                 std::ostringstream ss;
+                 ss << "<pedalboard.Clipping";
+                 ss << " threshold_db=" << plugin.getThresholdDecibels();
+                 ss << " at " << &plugin;
+                 ss << ">";
+                 return ss.str();
+               })
+          .def_property("threshold_db", &Clipping<float>::getThresholdDecibels,
+                        &Clipping<float>::setThresholdDecibels);
+  bindDenseParameter(
+      binding, "threshold_db",
+      [](Clipping<float> &effect, float value) {
+        effect.setThresholdDecibels(value);
+      },
+      true);
 }
 }; // namespace Pedalboard
