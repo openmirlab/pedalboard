@@ -279,3 +279,20 @@ def test_concurrent_native_calls_preserve_independent_reset_results():
         results = list(pool.map(lambda c: effect(audio, 48000, automation=c), curves_list))
     for actual, want in zip(results, expected):
         assert_array_equal(actual, want)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("warm", [False, True])
+def test_96k_continuation_covers_entire_smoothing_ramp(mode, warm):
+    # 4096 frames are less than 50 ms at 96 kHz; retain a longer future here.
+    rate = 96000
+    audio, curves = signal(), controls()
+    prefix = signal(frames=4096) if warm else None
+    expected, scalar = reference(mode, audio, curves, rate, prefix)
+    effect = LadderFilter(mode=mode, **initial(curves))
+    if prefix is not None:
+        effect(prefix, rate)
+    assert_array_equal(effect(audio, rate, reset=not warm, automation=curves), expected)
+    future = signal(frames=8192)
+    assert len(future[0]) / rate > 0.05
+    assert_array_equal(effect(future, rate, reset=False), scalar(future, rate, reset=False))
