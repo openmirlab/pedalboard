@@ -112,6 +112,10 @@ struct DenseParameterControl {
 using DenseControlPreflight =
     std::function<void(const std::vector<DenseParameterControl> &)>;
 
+using DenseControlProcess =
+    std::function<int(const juce::dsp::ProcessContextReplacing<float> &,
+                      const std::vector<DenseParameterControl> &, size_t)>;
+
 // This private container makes the existing processing lock cover the child.
 // Only zero-latency effects are admitted by explicit bindings.
 class DenseParameterProcessor : public PluginContainer {
@@ -120,9 +124,11 @@ public:
                           std::vector<DenseParameterControl> controls,
                           ChannelLayout layout, unsigned int channels,
                           DenseControlPreflight preflight = {},
-                          std::function<void()> prepared = {})
+                          std::function<void()> prepared = {},
+                          DenseControlProcess bulkProcess = {})
       : PluginContainer({effect}), controls(std::move(controls)),
-        preflight(std::move(preflight)), prepared(std::move(prepared)) {
+        preflight(std::move(preflight)), prepared(std::move(prepared)),
+        bulkProcess(std::move(bulkProcess)) {
     lastChannelLayout = layout;
     lastSpec.numChannels = channels;
   }
@@ -152,6 +158,13 @@ public:
       throw std::runtime_error(
           "Automation consumed more frames than supplied.");
 
+    if (bulkProcess) {
+      if (bulkProcess(context, controls, cursor) != (int)count)
+        throw std::runtime_error(
+            "Dense bulk processing requires a zero-latency effect.");
+      cursor += count;
+      return (int)count;
+    }
     size_t start = 0;
     while (start < count) {
       applyControls(cursor + start);
@@ -203,6 +216,7 @@ private:
   size_t cursor = 0;
   DenseControlPreflight preflight;
   std::function<void()> prepared;
+  DenseControlProcess bulkProcess;
   bool validated = false;
 };
 
@@ -221,17 +235,24 @@ using DenseParameterPreflight =
 template <typename Effect>
 using DenseParameterPrepared = std::function<void(Effect &)>;
 
+template <typename Effect>
+using DenseParameterProcess =
+    std::function<int(Effect &,
+                      const juce::dsp::ProcessContextReplacing<float> &,
+                      const std::vector<DenseParameterControl> &, size_t)>;
+
 // The specification order defines simultaneous updates, independently of the
 // Python dict's insertion order. All controls validate before DSP mutation.
 template <typename Effect, typename... Options>
 void bindDenseParameters(py::class_<Effect, Options...> &binding,
                          std::vector<DenseParameterSpec<Effect>> specs,
                          DenseParameterPreflight<Effect> preflight = {},
-                         DenseParameterPrepared<Effect> prepared = {}) {
-  auto callback = [specs, preflight,
-                   prepared](std::shared_ptr<Effect> self, py::array input,
-                             double sampleRate, unsigned int bufferSize,
-                             bool reset, py::object automation) {
+                         DenseParameterPrepared<Effect> prepared = {},
+                         DenseParameterProcess<Effect> bulkProcess = {}) {
+  auto callback = [specs, preflight, prepared,
+                   bulkProcess](std::shared_ptr<Effect> self, py::array input,
+                                double sampleRate, unsigned int bufferSize,
+                                bool reset, py::object automation) {
     if (automation.is_none())
       return process(input, sampleRate, {self}, bufferSize, reset);
     if (!py::isinstance<py::dict>(automation))
@@ -324,9 +345,15 @@ void bindDenseParameters(py::class_<Effect, Options...> &binding,
     std::function<void()> afterPrepare;
     if (prepared)
       afterPrepare = [self, prepared] { prepared(*self); };
+    DenseControlProcess bulk;
+    if (bulkProcess)
+      bulk = [self, bulkProcess](const auto &context, const auto &values,
+                                 size_t cursor) {
+        return bulkProcess(*self, context, values, cursor);
+      };
     auto adapter = std::make_shared<DenseParameterProcessor>(
         self, std::move(controls), layout, channels, std::move(validation),
-        std::move(afterPrepare));
+        std::move(afterPrepare), std::move(bulk));
     return process(audio, sampleRate, {adapter}, bufferSize, reset);
   };
   for (const char *method : {"process", "__call__"})

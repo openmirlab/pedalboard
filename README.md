@@ -5,7 +5,7 @@ Pedalboard effects. It is maintained by [OpenMIRLab](https://github.com/openmirl
 and builds on [Spotify's Pedalboard](https://github.com/spotify/pedalboard).
 The existing JUCE algorithms and scalar processing API are retained.
 
-This development snapshot adds Phaser automation on `feat/phaser-automation`;
+This development snapshot adds Convolution mix automation on `feat/convolution-automation`;
 the source installation below selects this branch.
 
 ## Automation in this fork
@@ -25,6 +25,7 @@ the source installation below selects this branch.
 | `Delay` | `delay_seconds`, `feedback`, `mix` |
 | `Chorus` | `rate_hz`, `depth`, `centre_delay_ms`, `feedback`, `mix` |
 | `Phaser` | `rate_hz`, `depth`, `centre_frequency_hz`, `feedback`, `mix` |
+| `Convolution` | `mix` (fixed impulse response) |
 
 Pass an `automation` dict to an effect's `process` or `__call__`. Each curve is a
 one-dimensional real NumPy array with one target per input audio frame, shared
@@ -64,6 +65,9 @@ Chorus keeps its original LFO phase and native smoothing; bounded scratch
 processing preserves history when blocks grow.
 Phaser retains its original four-frame frequency-update clock and 50 ms ramps;
 the dense path also refreshes centre-frequency mapping after format preparation.
+Convolution computes the wet signal in blocks, then applies the mix curve through
+its original 50 ms dry/wet ramps. Block growth preserves its tail; differing FFT
+partitions can produce small float32 differences.
 Fixed parameters should use the existing scalar path.
 
 See the [automation reference](docs/source/reference/pedalboard.rst) for accepted
@@ -79,7 +83,7 @@ Installing `pedalboard` from PyPI installs the upstream distribution.
 A C++ toolchain is required. With [uv](https://docs.astral.sh/uv/) installed:
 
 ```shell
-git clone --branch feat/phaser-automation --recurse-submodules https://github.com/openmirlab/pedalboard.git
+git clone --branch feat/convolution-automation --recurse-submodules https://github.com/openmirlab/pedalboard.git
 cd pedalboard
 uv venv --python 3.12
 uv pip install .

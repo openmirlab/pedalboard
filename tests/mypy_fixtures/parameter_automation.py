@@ -7,6 +7,7 @@ from pedalboard import (
     Chorus,
     Clipping,
     Compressor,
+    Convolution,
     Delay,
     Distortion,
     Gain,
@@ -76,3 +77,10 @@ Phaser().process(
     automation={"rate_hz": np.ones(128), "depth": curve, "centre_frequency_hz": np.full(128, 1300)},
 )
 Phaser()(audio, 48000, reset=False, automation={"feedback": curve, "mix": curve})
+
+Convolution(np.ones(16, dtype=np.float32), sample_rate=48000).process(
+    audio, 48000, automation={"mix": curve}
+)
+Convolution(np.ones(16, dtype=np.float32), sample_rate=48000)(
+    audio, 48000, reset=False, automation={"mix": curve}
+)

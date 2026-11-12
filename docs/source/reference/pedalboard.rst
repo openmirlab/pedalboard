@@ -366,3 +366,42 @@ No-automation calls (including None/empty automation) retain the legacy mapping;
 prepare the scalar effect at the new rate then reassign centre when needed. This
 correction makes cold dense and legacy scalar output intentionally differ at low
 rates; at 44.1/48/96 kHz the original normalization range is already the same.
+
+
+Convolution controls
+~~~~~~~~~~~~~~~~~~~~
+
+``Convolution`` accepts ``automation={"mix": curve}``, finite targets in [0, 1]
+at float32 precision. The constructor, IR filename/array properties, normalization
+and IR sample-rate conversion retain their interfaces. IR content is fixed: no
+impulse-response curve/replacement is introduced. The final mix target persists.
+
+Mix uses the original linear DryWetMixer with 50 ms gain ramps. The input is copied
+into that mixer, wet convolution runs over an available block, then the mix targets
+are applied to corresponding output-frame subspans. Mix does not affect the wet
+engine's input or history. This avoids recalculating partial FFTs at each target
+change; convolution still runs at mix zero so later wet output retains its tail.
+No new mixing rule, smoothing or backend is added.
+
+Preparation occurs on sample-rate/channel-count changes. The first prepared capacity
+is bounded to [128, 8192] frames; normal default8192 processing keeps its original
+partition, while tiny/large first blocks are bounded. Later larger calls are split
+at that capacity without rebuilding the engine or clearing the tail/mixer progress.
+``reset=False`` preserves histories; ``reset=True`` and format changes retain the
+original clearing/initialization behavior. To render a tail, supply zero input and
+matching curves with ``reset=False``; no output frames are appended automatically.
+
+The curve path supports mono/stereo and the existing zero-latency engine. Leading
+silence or phase delay in an IR is part of the IR, not added engine latency. Rates
+must be finite and >= 100 Hz, with representable native 50 ms ramps and projected
+resampled-IR size. These format/size checks run under the native lock before reset
+or target changes and are not a memory budget. Scalar setter acceptance stays unchanged.
+
+FFT rounding depends on partition and partial-call sizes. Fine scalar calls and
+bulk convolution followed by mix automation can therefore differ by small float32
+residuals even with the same control timeline. Validation includes long tails,
+independent original comparisons and direct FIR timing; do not interpret byte
+inequality alone as a changed algorithm. Fixed settings should use the scalar path
+to avoid dense curve copies/validation. Small caller audio chunks still require
+small zero-latency FFT processing; the curve path does not buffer extra audio to
+make those calls larger or add output latency.
