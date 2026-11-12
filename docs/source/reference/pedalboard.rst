@@ -285,3 +285,41 @@ the pinned JUCE int buffer/index arithmetic safe. This does not impose a memory
 budget; the original implementation allocates up to 30 seconds per channel even
 for short requested delays. Scalar setter acceptance is unchanged. Use the scalar
 path for fixed settings to avoid curve validation/scheduling overhead.
+
+
+Chorus controls
+~~~~~~~~~~~~~~~
+
+``Chorus`` accepts synchronized ``rate_hz``, ``depth``, ``centre_delay_ms``,
+``feedback`` and ``mix`` curves. Rate targets must be finite in [0, 100] Hz,
+depth/mix finite in [0, 1], feedback finite in [-1, 1]. Centre delay accepts any
+finite float32 target, preserving the original internal [1, 100] ms clamp. Its
+Python getter retains the requested value, even when the DSP clamps it. Omitted
+controls keep their scalar values and validate under the native processing lock
+before reset/preparation/target changes. Existing scalar setter acceptance is
+unchanged; the new curve path rejects out-of-domain depth/feedback targets rather
+than relying on JUCE debug assertions.
+
+All five same-frame targets are applied before that frame in constructor order,
+independently of dict insertion order. The original oscillator frequency, depth,
+feedback and linear dry/wet gains keep their 50 ms ramps. Centre delay changes
+immediately; large/rapid changes can produce original read-head artifacts. No
+additional interpolation, crossfade, smoother or algorithm is introduced. The
+original linear fractional-delay interpolation and shared LFO across channels
+remain unchanged; this does not add a stereo phase offset or new widening mode.
+
+``reset=False`` preserves LFO phase, delay memory, previous feedback output and
+smoother progress. ``reset=True`` retains the original phase/delay reset and
+smoother target initialization. Sample-rate/channel-count changes still prepare
+and reset. To preserve memory on block-size growth, the DSP is prepared with a
+fixed 1024-frame scratch capacity and larger calls are split internally. Caller
+``buffer_size`` still controls outer processing; internal spans never exceed the
+prepared buffers. This adds no output latency and does not change frame counts.
+
+The curve path requires a finite sample rate >= 100 Hz to bound the pinned
+oscillator's per-sample phase wrapping over its full 0–100 Hz range. The float32
+rate and 50 ms ramp length must be representable, and the maximum 110 ms delay
+allocation/index sums must fit native ints. These are format/arithmetic limits,
+not a memory budget. Fixed settings should use the scalar path to avoid curve
+validation/scheduling overhead. Numerical parity does not guarantee that extreme
+feedback or modulation settings are musically appropriate.

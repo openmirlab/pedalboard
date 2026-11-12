@@ -25,6 +25,9 @@ enum class DenseParameterDomain {
   EQGain,
   UnitInterval,
   DelaySeconds,
+  Finite,
+  ChorusRate,
+  SignedUnitInterval,
   Drive
 };
 
@@ -62,6 +65,12 @@ inline bool validDenseParameter(double original, float value,
   }
   case DenseParameterDomain::BitDepth:
     return original >= 0 && original <= 32;
+  case DenseParameterDomain::Finite:
+    return true;
+  case DenseParameterDomain::ChorusRate:
+    return original >= 0 && original <= 100;
+  case DenseParameterDomain::SignedUnitInterval:
+    return original >= -1 && original <= 1;
   case DenseParameterDomain::DelaySeconds:
     return original >= 0 && original <= 30;
   case DenseParameterDomain::UnitInterval:

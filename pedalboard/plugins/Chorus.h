@@ -21,6 +21,7 @@
 namespace py = pybind11;
 
 #include "../JucePlugin.h"
+#include "../parameter_automation.h"
 
 namespace Pedalboard {
 
@@ -31,6 +32,78 @@ namespace Pedalboard {
 
 template <typename SampleType>
 class Chorus : public JucePlugin<juce::dsp::Chorus<SampleType>> {
+public:
+  void validateAutomation(const std::vector<DenseParameterControl> &controls,
+                          double rate) const {
+    const float nativeRate = (float)rate;
+    // Bound phase wrapping for the whole supported 0..100Hz LFO range,
+    // and protect the 50ms ramps and 110ms linear-delay int indices.
+    // Leave headroom for float32 delay rounding and interpolation index + 1.
+    if (!std::isfinite(rate) || rate < 100 || !std::isfinite(nativeRate) ||
+        std::floor((double)nativeRate * 0.05) >
+            std::numeric_limits<int>::max() ||
+        std::ceil(110.0 * rate / 1000.0) >
+            (std::numeric_limits<int>::max() - 1) / 4)
+      throw std::invalid_argument(
+          "Chorus automation requires a finite sample rate >= 100Hz with "
+          "representable native ramps and delay buffers.");
+    float frequency = getRate(), depth = getDepth(), centre = getCentreDelay(),
+          feedback = getFeedback(), mix = getMix();
+    for (const auto &control : controls) {
+      const float v = control.values.front();
+      if (control.name == "rate_hz")
+        frequency = v;
+      else if (control.name == "depth")
+        depth = v;
+      else if (control.name == "centre_delay_ms")
+        centre = v;
+      else if (control.name == "feedback")
+        feedback = v;
+      else if (control.name == "mix")
+        mix = v;
+    }
+    if (!validDenseParameter(frequency, frequency,
+                             DenseParameterDomain::ChorusRate, rate) ||
+        !validDenseParameter(depth, depth, DenseParameterDomain::UnitInterval,
+                             rate) ||
+        !std::isfinite(centre) ||
+        !validDenseParameter(feedback, feedback,
+                             DenseParameterDomain::SignedUnitInterval, rate) ||
+        !validDenseParameter(mix, mix, DenseParameterDomain::UnitInterval,
+                             rate))
+      throw std::invalid_argument("Invalid effective Chorus controls.");
+  }
+
+  void prepare(const juce::dsp::ProcessSpec &spec) override {
+    if (this->lastSpec.sampleRate != spec.sampleRate ||
+        this->lastSpec.numChannels != spec.numChannels) {
+      auto boundedSpec = spec;
+      boundedSpec.maximumBlockSize = scratchFrames;
+      JucePlugin<juce::dsp::Chorus<SampleType>>::prepare(boundedSpec);
+    }
+    this->lastSpec = spec;
+  }
+
+  int process(
+      const juce::dsp::ProcessContextReplacing<SampleType> &context) override {
+    auto block = context.getOutputBlock();
+    for (size_t start = 0; start < block.getNumSamples();
+         start += scratchFrames) {
+      auto span =
+          block.getSubBlock(start, std::min((size_t)scratchFrames,
+                                            block.getNumSamples() - start));
+      juce::dsp::ProcessContextReplacing<SampleType> boundedContext(span);
+      boundedContext.isBypassed = context.isBypassed;
+      this->getDSP().process(boundedContext);
+    }
+    return (int)block.getNumSamples();
+  }
+
+private:
+  // Chorus owns several private block-sized buffers. Keep their prepared
+  // capacity fixed; larger calls reuse them without clearing phase or echoes.
+  static constexpr unsigned int scratchFrames = 1024;
+
   DEFINE_DSP_SETTER_AND_GETTER(SampleType, Rate, {
     if (value < CHORUS_MIN_RATE_HZ || value > CHORUS_MAX_RATE_HZ) {
       throw std::range_error("Rate must be between " TO_STRING(
@@ -48,54 +121,74 @@ class Chorus : public JucePlugin<juce::dsp::Chorus<SampleType>> {
 };
 
 inline void init_chorus(py::module &m) {
-  py::class_<Chorus<float>, Plugin, std::shared_ptr<Chorus<float>>>(
-      m, "Chorus",
-      "A basic chorus effect.\n\nThis audio effect can be controlled via the "
-      "speed and depth of the LFO controlling the frequency response, a mix "
-      "control, a feedback control, and the centre delay of the modulation. "
-      "\n\n"
-      "Note: To get classic chorus sounds try to use a centre delay time "
-      "around 7-8 ms with a low feedback volume and a low depth. This effect "
-      "can also be used as a flanger with a lower centre delay time and a "
-      "lot of feedback, and as a vibrato effect if the mix value is 1.")
-      .def(py::init([](float rateHz, float depth, float centreDelayMs,
-                       float feedback, float mix) {
-             auto plugin = std::make_unique<Chorus<float>>();
-             plugin->setRate(rateHz);
-             plugin->setDepth(depth);
-             plugin->setCentreDelay(centreDelayMs);
-             plugin->setFeedback(feedback);
-             plugin->setMix(mix);
-             return plugin;
-           }),
-           py::arg("rate_hz") = 1.0, py::arg("depth") = 0.25,
-           py::arg("centre_delay_ms") = 7.0, py::arg("feedback") = 0.0,
-           py::arg("mix") = 0.5)
-      .def("__repr__",
-           [](const Chorus<float> &plugin) {
-             std::ostringstream ss;
-             ss << "<pedalboard.Chorus";
-             ss << " rate_hz=" << plugin.getRate();
-             ss << " depth=" << plugin.getDepth();
-             ss << " centre_delay_ms=" << plugin.getCentreDelay();
-             ss << " feedback=" << plugin.getFeedback();
-             ss << " mix=" << plugin.getMix();
-             ss << " at " << &plugin;
-             ss << ">";
-             return ss.str();
-           })
-      .def_property(
-          "rate_hz", &Chorus<float>::getRate, &Chorus<float>::setRate,
-          "The speed of the chorus effect's low-frequency oscillator (LFO), in "
-          "Hertz. This value must be between " TO_STRING(
-              CHORUS_MIN_RATE_HZ) " Hz and " TO_STRING(CHORUS_MAX_RATE_HZ) " Hz"
-                                                                           ".")
-      .def_property("depth", &Chorus<float>::getDepth, &Chorus<float>::setDepth)
-      .def_property("centre_delay_ms", &Chorus<float>::getCentreDelay,
-                    &Chorus<float>::setCentreDelay)
-      .def_property("feedback", &Chorus<float>::getFeedback,
-                    &Chorus<float>::setFeedback)
-      .def_property("mix", &Chorus<float>::getMix, &Chorus<float>::setMix);
-  ;
+  auto binding =
+      py::class_<Chorus<float>, Plugin, std::shared_ptr<Chorus<float>>>(
+          m, "Chorus",
+          "A basic chorus effect.\n\nThis audio effect can be controlled via "
+          "the "
+          "speed and depth of the LFO controlling the frequency response, a "
+          "mix "
+          "control, a feedback control, and the centre delay of the "
+          "modulation. "
+          "\n\n"
+          "Note: To get classic chorus sounds try to use a centre delay time "
+          "around 7-8 ms with a low feedback volume and a low depth. This "
+          "effect "
+          "can also be used as a flanger with a lower centre delay time and a "
+          "lot of feedback, and as a vibrato effect if the mix value is 1.")
+          .def(py::init([](float rateHz, float depth, float centreDelayMs,
+                           float feedback, float mix) {
+                 auto plugin = std::make_unique<Chorus<float>>();
+                 plugin->setRate(rateHz);
+                 plugin->setDepth(depth);
+                 plugin->setCentreDelay(centreDelayMs);
+                 plugin->setFeedback(feedback);
+                 plugin->setMix(mix);
+                 return plugin;
+               }),
+               py::arg("rate_hz") = 1.0, py::arg("depth") = 0.25,
+               py::arg("centre_delay_ms") = 7.0, py::arg("feedback") = 0.0,
+               py::arg("mix") = 0.5)
+          .def("__repr__",
+               [](const Chorus<float> &plugin) {
+                 std::ostringstream ss;
+                 ss << "<pedalboard.Chorus";
+                 ss << " rate_hz=" << plugin.getRate();
+                 ss << " depth=" << plugin.getDepth();
+                 ss << " centre_delay_ms=" << plugin.getCentreDelay();
+                 ss << " feedback=" << plugin.getFeedback();
+                 ss << " mix=" << plugin.getMix();
+                 ss << " at " << &plugin;
+                 ss << ">";
+                 return ss.str();
+               })
+          .def_property(
+              "rate_hz", &Chorus<float>::getRate, &Chorus<float>::setRate,
+              "The speed of the chorus effect's low-frequency oscillator "
+              "(LFO), in "
+              "Hertz. This value must be between " TO_STRING(
+                  CHORUS_MIN_RATE_HZ) " Hz and " TO_STRING(CHORUS_MAX_RATE_HZ) " Hz"
+                                                                               ".")
+          .def_property("depth", &Chorus<float>::getDepth,
+                        &Chorus<float>::setDepth)
+          .def_property("centre_delay_ms", &Chorus<float>::getCentreDelay,
+                        &Chorus<float>::setCentreDelay)
+          .def_property("feedback", &Chorus<float>::getFeedback,
+                        &Chorus<float>::setFeedback)
+          .def_property("mix", &Chorus<float>::getMix, &Chorus<float>::setMix);
+  DenseParameterPreflight<Chorus<float>> preflight =
+      [](const Chorus<float> &effect,
+         const std::vector<DenseParameterControl> &controls, double rate,
+         unsigned int) { effect.validateAutomation(controls, rate); };
+  bindDenseParameters(
+      binding,
+      {{"rate_hz", &Chorus<float>::setRate, DenseParameterDomain::ChorusRate},
+       {"depth", &Chorus<float>::setDepth, DenseParameterDomain::UnitInterval},
+       {"centre_delay_ms", &Chorus<float>::setCentreDelay,
+        DenseParameterDomain::Finite},
+       {"feedback", &Chorus<float>::setFeedback,
+        DenseParameterDomain::SignedUnitInterval},
+       {"mix", &Chorus<float>::setMix, DenseParameterDomain::UnitInterval}},
+      std::move(preflight));
 }
 }; // namespace Pedalboard

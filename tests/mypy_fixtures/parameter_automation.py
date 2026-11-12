@@ -4,6 +4,7 @@ import numpy as np
 
 from pedalboard import (
     Bitcrush,
+    Chorus,
     Clipping,
     Compressor,
     Delay,
@@ -60,3 +61,10 @@ Reverb()(
 
 Delay().process(audio, 48000, automation={"delay_seconds": np.full(128, 0.125), "feedback": curve})
 Delay()(audio, 48000, reset=False, automation={"mix": curve})
+
+Chorus().process(
+    audio,
+    48000,
+    automation={"rate_hz": np.ones(128), "depth": curve, "centre_delay_ms": np.full(128, 8)},
+)
+Chorus()(audio, 48000, reset=False, automation={"feedback": curve, "mix": curve})
