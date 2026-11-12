@@ -433,3 +433,41 @@ history. Growing block sizes preserve the detector, delay and control queues by
 using bounded internal scratch. Scalar history is retained for a warm transition
 into automation. Curves omitted from a call hold their requested scalar values;
 all effective values are checked before DSP history changes.
+
+
+PitchShift controls
+~~~~~~~~~~~~~~~~~~~
+
+``PitchShift`` accepts ``automation={"semitones": curve}`` with finite targets in
+[-72,72] at float32 precision. Curves have one value per source input frame and
+are shared across channels. Pitch targets travel through the existing one-second
+priming delay alongside source audio, then are applied immediately before those
+frames enter Rubber Band. Its original real-time/high-quality backend, spectral
+windows and variable output availability are retained. Scheduling a target is not
+a promise of an instantaneous audible pitch transition at an exact output sample.
+The latency hint is an allocation hint, not a control-to-output mapping.
+
+``reset=False`` preserves pending audio, control targets and pitch-engine state;
+concatenate returned frames and feed zero input to drain outstanding audio. Scalar
+continuations hold the requested target while pending earlier targets drain.
+``reset=True`` drains automatically with held final targets and returns the input
+frame count. Getters retain the last consumed source target. Scalar-only pitch
+changes keep their original engine-clock semantics. The fork fixes repeated
+preparation clearing the priming delay, which previously discarded short stream
+inputs; a warm transition into curves retains recent scalar target history.
+
+Varying curves use canonical one-frame steps inside the native engine, including
+priming and drain, so outer call boundaries do not move target updates. Uniform
+constant controls and histories retain bulk processing; fixed scalar values remain
+the least expensive route. No per-frame Python callbacks are used.
+
+The first prepared capacity is bounded to[1,8192]; larger subsequent contexts reuse
+bounded subspans without rebuilding the engine. Valid output is packed according
+to the host's right-aligned frame-count contract. Explicit reset and format changes
+clear the timeline. Explicit reset also reconstructs the nested Rubber Band engine
+on next preparation: its upstream reset retains configuration selected by previous
+pitch changes and is insufficient to reproduce a fresh dynamic render. This adds
+setup cost to reset renders; warm streaming retains the existing engine.
+Fixed pitch should use the scalar API. ``time_stretch`` remains
+a separate interface with its own processing, parameter resolution and duration
+contract; this feature does not change it.

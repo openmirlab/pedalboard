@@ -1509,6 +1509,28 @@ class PitchShift(Plugin):
     This effect uses `Chris Cannam's wonderful *Rubber Band* library <https://breakfastquay.com/rubberband/>`_ audio stretching library.
     """
 
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply dense native curves; one real NumPy value per input audio frame."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
+
     def __init__(self, semitones: float = 0.0) -> None: ...
     def __repr__(self) -> str: ...
     @property

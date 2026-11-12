@@ -34,13 +34,16 @@ class PrimeWithSilence
     : public JucePlugin<juce::dsp::DelayLine<
           SampleType, juce::dsp::DelayLineInterpolationTypes::None>> {
 public:
-  virtual ~PrimeWithSilence(){};
+  virtual ~PrimeWithSilence() {};
 
   virtual void prepare(const juce::dsp::ProcessSpec &spec) {
     JucePlugin<juce::dsp::DelayLine<
         SampleType,
         juce::dsp::DelayLineInterpolationTypes::None>>::prepare(spec);
-    this->getDSP().setMaximumDelayInSamples(silenceLengthSamples);
+    // Resizing resets JUCE's delay even when the size is unchanged. Repeated
+    // reset=False calls must preserve the audio waiting in this priming line.
+    if (this->getDSP().getMaximumDelayInSamples() != silenceLengthSamples)
+      this->getDSP().setMaximumDelayInSamples(silenceLengthSamples);
     this->getDSP().setDelay(silenceLengthSamples);
     plugin.prepare(spec);
   }
@@ -97,7 +100,7 @@ private:
  */
 class ExpectsToBePrimed : public AddLatency {
 public:
-  virtual ~ExpectsToBePrimed(){};
+  virtual ~ExpectsToBePrimed() {};
 
   virtual void prepare(const juce::dsp::ProcessSpec &spec) {
     getDSP().setMaximumDelayInSamples(10);

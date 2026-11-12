@@ -3,9 +3,9 @@
 This fork adds native, per-frame NumPy parameter automation to selected built-in
 Pedalboard effects. It is maintained by [OpenMIRLab](https://github.com/openmirlab)
 and builds on [Spotify's Pedalboard](https://github.com/spotify/pedalboard).
-The existing JUCE algorithms and scalar processing API are retained.
+The existing DSP algorithms and scalar processing API are retained.
 
-This development snapshot adds output-aligned BrickwallLimiter automation on `feat/brickwall-automation`;
+This development snapshot adds source-scheduled PitchShift automation on `feat/pitchshift-automation`;
 the source installation below selects this branch.
 
 ## Automation in this fork
@@ -27,6 +27,7 @@ the source installation below selects this branch.
 | `Phaser` | `rate_hz`, `depth`, `centre_frequency_hz`, `feedback`, `mix` |
 | `Convolution` | `mix` (fixed impulse response) |
 | `BrickwallLimiter` | `ceiling_db`, `release_ms` (fixed lookahead and detector) |
+| `PitchShift` | `semitones` (source time at the Rubber Band input) |
 
 Pass an `automation` dict to an effect's `process` or `__call__`. Each curve is a
 one-dimensional real NumPy array with one target per input audio frame, shared
@@ -73,6 +74,10 @@ BrickwallLimiter queues ceiling/release targets with its lookahead so they align
 with compensated output frames. Streaming calls can initially return fewer frames;
 explicit zero input drains pending audio, while `reset=True` drains automatically.
 Scalar-only calls retain their original input-clock behavior.
+PitchShift queues targets through its one-second priming delay, then applies them
+when corresponding source frames enter Rubber Band. Windowed pitch response is
+not an instantaneous sample-exact output transition. Short streaming calls retain
+the priming audio; block growth keeps the first prepared capacity and histories.
 Fixed parameters should use the existing scalar path.
 
 See the [automation reference](docs/source/reference/pedalboard.rst) for accepted
@@ -88,7 +93,7 @@ Installing `pedalboard` from PyPI installs the upstream distribution.
 A C++ toolchain is required. With [uv](https://docs.astral.sh/uv/) installed:
 
 ```shell
-git clone --branch feat/brickwall-automation --recurse-submodules https://github.com/openmirlab/pedalboard.git
+git clone --branch feat/pitchshift-automation --recurse-submodules https://github.com/openmirlab/pedalboard.git
 cd pedalboard
 uv venv --python 3.12
 uv pip install .

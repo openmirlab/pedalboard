@@ -29,6 +29,7 @@ enum class DenseParameterDomain {
   ModulationRate,
   SignedUnitInterval,
   LimiterCeiling,
+  PitchSemitones,
   PhaserFrequency,
   Drive
 };
@@ -67,6 +68,8 @@ inline bool validDenseParameter(double original, float value,
   }
   case DenseParameterDomain::BitDepth:
     return original >= 0 && original <= 32;
+  case DenseParameterDomain::PitchSemitones:
+    return original >= -72 && original <= 72;
   case DenseParameterDomain::LimiterCeiling: {
     const float gain = std::pow(10.0f, value / 20.0f);
     return gain > 0 && std::isfinite(gain);

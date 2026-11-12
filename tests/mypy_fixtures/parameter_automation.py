@@ -21,6 +21,7 @@ from pedalboard import (
     NoiseGate,
     PeakFilter,
     Phaser,
+    PitchShift,
     Reverb,
 )
 
@@ -88,3 +89,6 @@ Convolution(np.ones(16, dtype=np.float32), sample_rate=48000)(
 
 BrickwallLimiter().process(audio, 48000, automation={"ceiling_db": curve})
 BrickwallLimiter()(audio, 48000, reset=False, automation={"release_ms": np.ones(128)})
+
+PitchShift().process(audio, 48000, automation={"semitones": curve})
+PitchShift()(audio, 48000, reset=False, automation={"semitones": curve})
