@@ -1,3 +1,47 @@
+# Contributing to the OpenMIRLab fork
+
+Target the `main` branch of [openmirlab/pedalboard](https://github.com/openmirlab/pedalboard)
+for changes to this fork. Keep upstream attribution and the GPLv3 license intact.
+The inherited `master` branch records the upstream baseline.
+
+## Development setup
+
+Use Python 3.10 or newer; the automation work has been verified with Python 3.12.
+A C++ compiler is required (Xcode command-line tools on macOS). Linux also needs
+the FreeType/X11 development libraries used by JUCE; consult the platform package
+lists in `.github/workflows/all.yml` and `pyproject.toml` for build dependencies.
+
+```shell
+git clone --branch main --recurse-submodules https://github.com/openmirlab/pedalboard.git
+cd pedalboard
+uv venv --python 3.12
+uv pip install -e '.[test]' ruff clang-format
+```
+
+Run the focused automation checks:
+
+```shell
+uv run --no-project pytest tests/test_parameter_automation.py tests/test_dynamics_automation.py tests/test_filter_automation.py tests/test_eq_automation.py -q
+```
+
+Run the related existing tests for filters, small buffers, locks, containers,
+latency and the Python interface when those behaviors change. Use Ruff for changed
+Python files and clang-format for changed C++ files. Public interface changes also
+need matching stubs in `pedalboard_native/__init__.pyi`, examples in
+`tests/mypy_fixtures/parameter_automation.py`, and maintained API reference text.
+
+Keep scalar compatibility, input ownership, state lifetime and format transitions
+explicit. Tests should compare actual audio and continuation behavior; unchanged
+parameter values alone do not prove unchanged DSP history. Static coefficient
+stability is not a guarantee for arbitrary time-varying parameter modulation.
+
+## Upstream contribution guide
+
+The original Spotify contribution notes below are retained as upstream reference;
+the OpenMIRLab workflow and commands above apply to this fork.
+
+---
+
 # How to Contribute
 
 We'd love to get patches from you!

@@ -364,6 +364,28 @@ class Compressor(Plugin):
     For a lossy compression algorithm that introduces noise or artifacts, see ``pedalboard.MP3Compressor`` or ``pedalboard.GSMCompressor``.
     """
 
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply synchronized dense parameter targets, retaining DSP state on reset=False."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
+
     def __init__(
         self,
         threshold_db: float = 0,
@@ -826,6 +848,28 @@ class HighpassFilter(Plugin):
     Apply a first-order high-pass filter with a roll-off of 6dB/octave. The cutoff frequency will be attenuated by -3dB (i.e.: :math:`\\frac{1}{\\sqrt{2}}` as loud, expressed as a gain factor) and lower frequencies will be attenuated by a further 6dB per octave.)
     """
 
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply synchronized dense parameter targets, retaining DSP state on reset=False."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
+
     def __init__(self, cutoff_frequency_hz: float = 50) -> None: ...
     def __repr__(self) -> str: ...
     @property
@@ -841,6 +885,28 @@ class HighShelfFilter(IIRFilter, Plugin):
     """
     A high shelf filter plugin with variable Q and gain, as would be used in an equalizer. Frequencies above the cutoff frequency will be boosted (or cut) by the provided gain (in decibels).
     """
+
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply synchronized dense parameter targets, retaining DSP state on reset=False."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
 
     def __init__(
         self, cutoff_frequency_hz: float = 440, gain_db: float = 0.0, q: float = 0.7071067690849304
@@ -970,6 +1036,28 @@ class Limiter(Plugin):
     A simple limiter with standard threshold and release time controls, featuring two compressors and a hard clipper at 0 dB.
     """
 
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply synchronized dense parameter targets, retaining DSP state on reset=False."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
+
     def __init__(self, threshold_db: float = -10.0, release_ms: float = 100.0) -> None: ...
     def __repr__(self) -> str: ...
     @property
@@ -993,6 +1081,28 @@ class LowShelfFilter(IIRFilter, Plugin):
     """
     A low shelf filter with variable Q and gain, as would be used in an equalizer. Frequencies below the cutoff frequency will be boosted (or cut) by the provided gain value.
     """
+
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply synchronized dense parameter targets, retaining DSP state on reset=False."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
 
     def __init__(
         self, cutoff_frequency_hz: float = 440, gain_db: float = 0.0, q: float = 0.7071067690849304
@@ -1027,6 +1137,28 @@ class LowpassFilter(Plugin):
     """
     Apply a first-order low-pass filter with a roll-off of 6dB/octave. The cutoff frequency will be attenuated by -3dB (i.e.: 0.707x as loud).
     """
+
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply synchronized dense parameter targets, retaining DSP state on reset=False."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
 
     def __init__(self, cutoff_frequency_hz: float = 50) -> None: ...
     def __repr__(self) -> str: ...
@@ -1063,6 +1195,28 @@ class NoiseGate(Plugin):
     """
     A simple noise gate with standard threshold, ratio, attack time and release time controls. Can be used as an expander if the ratio is low.
     """
+
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply synchronized dense parameter targets, retaining DSP state on reset=False."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
 
     def __init__(
         self,
@@ -1109,6 +1263,28 @@ class PeakFilter(IIRFilter, Plugin):
     """
     A peak (or notch) filter with variable Q and gain, as would be used in an equalizer. Frequencies around the cutoff frequency will be boosted (or cut) by the provided gain value.
     """
+
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply synchronized dense parameter targets, retaining DSP state on reset=False."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
 
     def __init__(
         self, cutoff_frequency_hz: float = 440, gain_db: float = 0.0, q: float = 0.7071067690849304

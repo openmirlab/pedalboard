@@ -1,3 +1,88 @@
+# Pedalboard — OpenMIRLab fork
+
+This fork adds native, per-frame NumPy parameter automation to selected built-in
+Pedalboard effects. It is maintained by [OpenMIRLab](https://github.com/openmirlab)
+and builds on [Spotify's Pedalboard](https://github.com/spotify/pedalboard).
+The existing JUCE algorithms and scalar processing API are retained.
+
+## Automation in this fork
+
+| Effects | Supported curve parameters |
+| --- | --- |
+| `Gain` | `gain_db` |
+| `Clipping` | `threshold_db` |
+| `Distortion` | `drive_db` |
+| `Bitcrush` | `bit_depth` |
+| `Compressor`, `NoiseGate` | `threshold_db`, `ratio`, `attack_ms`, `release_ms` |
+| `Limiter` | `threshold_db`, `release_ms` |
+| `LowpassFilter`, `HighpassFilter` | `cutoff_frequency_hz` |
+| `PeakFilter`, `LowShelfFilter`, `HighShelfFilter` | `cutoff_frequency_hz`, `gain_db`, `q` |
+
+Pass an `automation` dict to an effect's `process` or `__call__`. Each curve is a
+one-dimensional real NumPy array with one target per input audio frame, shared
+across channels. Targets use the existing physical units at float32 precision.
+The native scheduler applies all targets at a frame before processing that frame,
+without per-frame Python callbacks or additional smoothing.
+
+```python
+import numpy as np
+from pedalboard import PeakFilter
+
+sample_rate = 48000
+seconds = np.arange(sample_rate, dtype=np.float32) / sample_rate
+audio = (0.2 * np.sin(2 * np.pi * 220 * seconds)).astype(np.float32)
+
+output = PeakFilter().process(
+    audio,
+    sample_rate,
+    automation={
+        "cutoff_frequency_hz": np.geomspace(200, 8000, audio.size).astype(np.float32),
+        "gain_db": np.linspace(0, 6, audio.size, dtype=np.float32),
+        "q": np.full(audio.size, 0.707, dtype=np.float32),
+    },
+)
+```
+
+For streaming, slice audio and curves together and pass `reset=False`. Supported
+filters and dynamics retain processing memory when only the block size grows.
+EQ curves also receive joint coefficient validation before parameters or DSP
+history change. Fixed parameters should use the existing scalar path.
+
+See the [automation reference](docs/source/reference/pedalboard.rst) for accepted
+values, layouts, reset behavior and effect-specific limits. This interface targets
+individual supported built-ins; `Pedalboard`/`Chain`/`Mix` routing and external-plugin
+automation retain their upstream interfaces.
+
+## Install the OpenMIRLab source
+
+The automation extensions are a development snapshot, not a separate PyPI release.
+Installing `pedalboard` from PyPI installs the upstream distribution.
+
+A C++ toolchain is required. With [uv](https://docs.astral.sh/uv/) installed:
+
+```shell
+git clone --branch main --recurse-submodules https://github.com/openmirlab/pedalboard.git
+cd pedalboard
+uv venv --python 3.12
+uv pip install .
+```
+
+The Python package and import name remain `pedalboard`. The automation extensions
+have been built and tested on macOS arm64 with Python 3.12; their Windows/Linux
+behavior has not yet been independently validated. The upstream platform support
+and distribution information below describes Spotify's project.
+
+## Contributing and license
+
+Use [CONTRIBUTING.md](CONTRIBUTING.md) for this fork's development workflow.
+The fork retains the [GNU GPL v3 license](LICENSE) and upstream attribution.
+
+---
+
+## Upstream Pedalboard
+
+The original Spotify README follows for the upstream project and distribution.
+
 ![Pedalboard Logo](https://user-images.githubusercontent.com/213293/131147303-4805181a-c7d5-4afe-afb2-f591a4b8e586.png)
 
 

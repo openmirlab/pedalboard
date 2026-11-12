@@ -21,10 +21,16 @@
 namespace py = pybind11;
 
 #include "../JucePlugin.h"
+#include "../parameter_automation.h"
 
 namespace Pedalboard {
 template <typename SampleType>
 class Compressor : public JucePlugin<juce::dsp::Compressor<SampleType>> {
+public:
+  void prepare(const juce::dsp::ProcessSpec &spec) override {
+    this->prepareWithoutBlockSizeReset(spec);
+  }
+
   DEFINE_DSP_SETTER_AND_GETTER(SampleType, Threshold, {});
   DEFINE_DSP_SETTER_AND_GETTER(SampleType, Ratio, {
     if (value < 1.0) {
@@ -36,42 +42,54 @@ class Compressor : public JucePlugin<juce::dsp::Compressor<SampleType>> {
 };
 
 inline void init_compressor(py::module &m) {
-  py::class_<Compressor<float>, Plugin, std::shared_ptr<Compressor<float>>>(
-      m, "Compressor",
-      "A dynamic range compressor, used to reduce the volume of loud sounds "
-      "and \"compress\" the loudness of the signal.\n\nFor a lossy compression "
-      "algorithm that introduces noise or artifacts, see "
-      "``pedalboard.MP3Compressor`` or ``pedalboard.GSMCompressor``.")
-      .def(py::init([](float thresholddB, float ratio, float attackMs,
-                       float releaseMs) {
-             auto plugin = std::make_unique<Compressor<float>>();
-             plugin->setThreshold(thresholddB);
-             plugin->setRatio(ratio);
-             plugin->setAttack(attackMs);
-             plugin->setRelease(releaseMs);
-             return plugin;
-           }),
-           py::arg("threshold_db") = 0, py::arg("ratio") = 1,
-           py::arg("attack_ms") = 1.0, py::arg("release_ms") = 100)
-      .def("__repr__",
-           [](const Compressor<float> &plugin) {
-             std::ostringstream ss;
-             ss << "<pedalboard.Compressor";
-             ss << " threshold_db=" << plugin.getThreshold();
-             ss << " ratio=" << plugin.getRatio();
-             ss << " attack_ms=" << plugin.getAttack();
-             ss << " release_ms=" << plugin.getRelease();
-             ss << " at " << &plugin;
-             ss << ">";
-             return ss.str();
-           })
-      .def_property("threshold_db", &Compressor<float>::getThreshold,
-                    &Compressor<float>::setThreshold)
-      .def_property("ratio", &Compressor<float>::getRatio,
-                    &Compressor<float>::setRatio)
-      .def_property("attack_ms", &Compressor<float>::getAttack,
-                    &Compressor<float>::setAttack)
-      .def_property("release_ms", &Compressor<float>::getRelease,
-                    &Compressor<float>::setRelease);
+  auto binding =
+      py::class_<Compressor<float>, Plugin, std::shared_ptr<Compressor<float>>>(
+          m, "Compressor",
+          "A dynamic range compressor, used to reduce the volume of loud "
+          "sounds "
+          "and \"compress\" the loudness of the signal.\n\nFor a lossy "
+          "compression "
+          "algorithm that introduces noise or artifacts, see "
+          "``pedalboard.MP3Compressor`` or ``pedalboard.GSMCompressor``.")
+          .def(py::init([](float thresholddB, float ratio, float attackMs,
+                           float releaseMs) {
+                 auto plugin = std::make_unique<Compressor<float>>();
+                 plugin->setThreshold(thresholddB);
+                 plugin->setRatio(ratio);
+                 plugin->setAttack(attackMs);
+                 plugin->setRelease(releaseMs);
+                 return plugin;
+               }),
+               py::arg("threshold_db") = 0, py::arg("ratio") = 1,
+               py::arg("attack_ms") = 1.0, py::arg("release_ms") = 100)
+          .def("__repr__",
+               [](const Compressor<float> &plugin) {
+                 std::ostringstream ss;
+                 ss << "<pedalboard.Compressor";
+                 ss << " threshold_db=" << plugin.getThreshold();
+                 ss << " ratio=" << plugin.getRatio();
+                 ss << " attack_ms=" << plugin.getAttack();
+                 ss << " release_ms=" << plugin.getRelease();
+                 ss << " at " << &plugin;
+                 ss << ">";
+                 return ss.str();
+               })
+          .def_property("threshold_db", &Compressor<float>::getThreshold,
+                        &Compressor<float>::setThreshold)
+          .def_property("ratio", &Compressor<float>::getRatio,
+                        &Compressor<float>::setRatio)
+          .def_property("attack_ms", &Compressor<float>::getAttack,
+                        &Compressor<float>::setAttack)
+          .def_property("release_ms", &Compressor<float>::getRelease,
+                        &Compressor<float>::setRelease);
+  bindDenseParameters(
+      binding,
+      {{"threshold_db", &Compressor<float>::setThreshold,
+        DenseParameterDomain::Threshold},
+       {"ratio", &Compressor<float>::setRatio, DenseParameterDomain::Ratio},
+       {"attack_ms", &Compressor<float>::setAttack,
+        DenseParameterDomain::TimeMilliseconds},
+       {"release_ms", &Compressor<float>::setRelease,
+        DenseParameterDomain::TimeMilliseconds}});
 }
 }; // namespace Pedalboard
