@@ -18,24 +18,29 @@ int kindOf(AudioComponentInstance instance) {
   AudioComponentDescription description{};
   AudioComponentGetDescription(AudioComponentInstanceGetComponent(instance),
                                &description);
-  return (description.componentSubType & 255) - '0';
+  const int suffix = description.componentSubType & 255;
+  return suffix >= 'a' ? suffix - 'a' + 10 : suffix - '0';
 }
+bool hasBuses(int kind) { return kind >= 9 && kind <= 11; }
 bool isInstrument(int kind) { return kind == 2 || (kind >= 6 && kind <= 8); }
 int latency(int kind) {
-  return kind == 1 || kind == 6 ? 20 : kind == 7 ? 4097 : kind == 8 ? 16385 : 0;
+  return kind == 1 || kind == 6 || kind == 11 ? 20
+         : kind == 7                          ? 4097
+         : kind == 8                          ? 16385
+                                              : 0;
 }
 class Probe : public MusicDeviceBase {
 public:
   explicit Probe(AudioComponentInstance instance)
       : MusicDeviceBase(instance,
-                        kindOf(instance) == 9            ? 2
+                        hasBuses(kindOf(instance))       ? 2
                         : isInstrument(kindOf(instance)) ? 0
                                                          : 1,
-                        kindOf(instance) == 9 ? 2 : 1),
+                        hasBuses(kindOf(instance)) ? 2 : 1),
         kind(kindOf(instance)) {
     CreateElements();
     Globals()->SetParameter(gainId, kind == 4 ? 1 : 0);
-    Globals()->SetParameter(frequencyId, 20);
+    Globals()->SetParameter(frequencyId, kind >= 10 ? 20000 : 20);
     Globals()->SetParameter(bypassId, 0);
     Globals()->SetParameter(blocksId, 0);
     Globals()->SetParameter(brokenId, 0);
@@ -46,7 +51,7 @@ public:
     return true;
   }
   UInt32 SupportedNumChannels(const AUChannelInfo **out) override {
-    if (kind == 9) {
+    if (hasBuses(kind)) {
       static const AUChannelInfo buses[] = {{1, 1}, {1, 2}, {2, 1}, {2, 2}};
       if (out)
         *out = buses;
@@ -169,15 +174,17 @@ public:
   Float64 GetLatency() override {
     return latency(kind) / GetOutput(0)->GetStreamFormat().mSampleRate;
   }
-  OSStatus MIDIEvent(UInt32 status, UInt32, UInt32 velocity,
+  OSStatus MIDIEvent(UInt32 status, UInt32 data1, UInt32 velocity,
                      UInt32 offset) override {
     if ((status & 0xf0) == 0x90 || (status & 0xf0) == 0x80)
       notes.push_back({offset, (status & 0xf0) == 0x90 && velocity > 0});
+    if (kind >= 10 && (status & 0xf0) == 0xb0 && data1 == 1)
+      controllers.push_back({offset, velocity >= 64});
     return noErr;
   }
   OSStatus Render(AudioUnitRenderActionFlags &flags, const AudioTimeStamp &time,
                   UInt32 frames) override {
-    if (kind == 9) {
+    if (hasBuses(kind)) {
       for (int bus = 0; bus < 2; ++bus) {
         const auto status = PullInput(bus, flags, time, frames);
         if (status != noErr)
@@ -189,7 +196,17 @@ public:
       const auto &key = GetInput(1)->GetBufferList();
       auto &output = GetOutput(0)->GetBufferList();
       auto &aux = GetOutput(1)->GetBufferList();
+      size_t event = 0, controller = 0;
+      const double gain =
+          std::pow(10.0, Globals()->GetParameter(gainId) / 20.0);
+      const double frequency = Globals()->GetParameter(frequencyId);
       for (UInt32 i = 0; i < frames; ++i) {
+        while (event < notes.size() && notes[event].first <= i)
+          note = notes[event++].second;
+        while (controller < controllers.size() &&
+               controllers[controller].first <= i)
+          Globals()->SetParameter(bypassId,
+                                  controllers[controller++].second ? 1 : 0);
         const float duck =
             std::abs(static_cast<float *>(key.mBuffers[0].mData)[i]) > .5f
                 ? .25f
@@ -198,11 +215,25 @@ public:
           static_cast<float *>(aux.mBuffers[c].mData)[i] =
               .5f * static_cast<float *>(
                         main.mBuffers[c % main.mNumberBuffers].mData)[i];
-        for (UInt32 c = 0; c < output.mNumberBuffers; ++c)
-          static_cast<float *>(output.mBuffers[c].mData)[i] =
-              duck * static_cast<float *>(
-                         main.mBuffers[c % main.mNumberBuffers].mData)[i];
+        for (UInt32 c = 0; c < output.mNumberBuffers; ++c) {
+          const float input = static_cast<float *>(
+              main.mBuffers[c % main.mNumberBuffers].mData)[i];
+          float value = kind >= 10 && Globals()->GetParameter(bypassId) >= .5
+                            ? input
+                        : kind == 9 ? duck * input
+                                    : (float)(duck * input * (note ? 1 : 0) *
+                                              gain * frequency / 20000.0);
+          if (latency(kind)) {
+            const float old = delay[c][position];
+            delay[c][position] = value;
+            value = old;
+          }
+          static_cast<float *>(output.mBuffers[c].mData)[i] = value;
+        }
+        position = (position + 1) % std::max(20, latency(kind));
       }
+      notes.clear();
+      controllers.clear();
       Globals()->SetParameter(blocksId, ++blocks);
       return noErr;
     }
@@ -252,11 +283,12 @@ private:
     position = 0;
     note = false;
     notes.clear();
+    controllers.clear();
     blocks = 0;
   }
   int kind, position = 0, blocks = 0;
   bool note = false;
-  std::vector<std::pair<UInt32, bool>> notes;
+  std::vector<std::pair<UInt32, bool>> notes, controllers;
   std::array<std::array<float, 16385>, 2> delay{};
 };
 } // namespace

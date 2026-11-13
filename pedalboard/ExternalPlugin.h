@@ -191,7 +191,8 @@ inline std::vector<std::string> findInstalledVSTPluginPaths() {
  * juce::MidiBuffer.
  */
 juce::MidiBuffer parseMidiBufferFromPython(py::object midiMessages,
-                                           float sampleRate) {
+                                           double sampleRate,
+                                           bool dropNegative = false) {
   juce::MidiBuffer buf;
   py::object normalizeFunction = py::module_::import("pedalboard.midi_utils")
                                      .attr("normalize_midi_messages");
@@ -240,6 +241,8 @@ juce::MidiBuffer parseMidiBufferFromPython(py::object midiMessages,
     double position = std::get<1>(tuple) * (double)sampleRate;
     if (!std::isfinite(position))
       throw std::invalid_argument("MIDI timestamps must be finite");
+    if (dropNegative && position < 0)
+      continue;
     // Keep fractional positions' existing truncation rule, but do not turn an
     // exactly sample-aligned Python timestamp into the preceding sample.
     const double nearest = std::round(position);
@@ -1123,8 +1126,12 @@ public:
    */
   void reset() override {
     if (pluginInstance) {
-      if ((reloadType == ExternalPluginReloadType::Unknown ||
-           reloadType == ExternalPluginReloadType::PersistsAudioOnReset) &&
+      // Audio-only reset detection cannot prove that an effect clears MIDI
+      // voices. Reuse the instrument-style reload policy after explicit MIDI.
+      const auto behavior =
+          busMidiHasProcessed ? ExternalPluginReloadType::Unknown : reloadType;
+      if ((behavior == ExternalPluginReloadType::Unknown ||
+           behavior == ExternalPluginReloadType::PersistsAudioOnReset) &&
           !juce::MessageManager::getInstance()->isThisTheMessageThread())
         throw std::runtime_error("Plugin must be reloaded on the main thread; "
                                  "use reset=False on worker threads");
@@ -1132,7 +1139,7 @@ public:
       // channel cache. This is a reset, not an illegal streaming format change.
       busStreamActive = false;
       automationActive = false;
-      switch (reloadType) {
+      switch (behavior) {
       case ExternalPluginReloadType::ClearsAudioOnReset:
         pluginInstance->reset();
         pluginInstance->releaseResources();
@@ -1155,6 +1162,7 @@ public:
       samplesProvided = 0;
       automationActive = false;
       scalarHasProcessed = false;
+      busMidiHasProcessed = false;
 #if JUCE_MAC && JUCE_PLUGINHOST_AU
       auAutomationParameters.clear();
 #endif
@@ -1272,54 +1280,90 @@ public:
     return hostedAudioBuses(*pluginInstance);
   }
 
-  py::dict processBuses(py::dict inputs, double sampleRate, py::dict outputs,
-                        py::object numFrames, int bufferSize,
-                        bool shouldReset) {
-    HostedAudioRequest request(inputs, outputs, numFrames, sampleRate,
-                               bufferSize);
-    // Python objects and output arrays stay alive until after GIL
-    // reacquisition. Layout negotiation and all processing share the ordinary
-    // plugin lock.
-    py::dict result;
-    std::map<int, py::array_t<float>> arrays;
-    std::map<int, float *> pointers;
+  py::dict getMidiCapabilities() {
     std::unique_lock<std::mutex> lock(this->mutex, std::defer_lock);
     {
       py::gil_scoped_release release;
       lock.lock();
     }
-    // The inherited AU host cannot disable buses; retain their channel layouts
-    // and supply silence/discard unrequested outputs instead.
-    bool disableOmitted = true;
+    py::dict result;
+    result["accepts_input"] = pluginInstance->acceptsMidi();
+    result["produces_output"] = pluginInstance->producesMidi();
+    return result;
+  }
+
+  py::object processBuses(
+      py::dict inputs, double sampleRate, py::dict outputs,
+      py::object numFrames, int bufferSize, bool shouldReset,
+      py::object midiMessages, bool returnMidi,
+      std::function<std::vector<DenseParameterControl>(size_t)> makeControls) {
+    HostedAudioRequest request(inputs, outputs, numFrames, sampleRate,
+                               bufferSize);
+    py::dict result;
+    py::list messages;
+    std::map<int, py::array_t<float>> arrays;
+    std::map<int, float *> pointers;
+    std::unique_lock<std::mutex> lock(this->mutex, std::defer_lock);
+    auto acquire = [&] {
+      py::gil_scoped_release release;
+      lock.lock();
+    };
+    auto validate = [&] {
+      bool disableOmitted = true;
 #if JUCE_MAC && JUCE_PLUGINHOST_AU
-    if constexpr (std::is_same_v<ExternalPluginType,
-                                 juce::AudioUnitPluginFormat>)
-      disableOmitted = false;
+      if constexpr (std::is_same_v<ExternalPluginType,
+                                   juce::AudioUnitPluginFormat>)
+        disableOmitted = false;
 #endif
-    const auto layout = request.layout(*pluginInstance, disableOmitted);
-    if (!shouldReset &&
-        ((!busStreamActive && (scalarHasProcessed || automationActive)) ||
-         (busStreamActive && (busStreamRate != sampleRate ||
-                              pluginInstance->getBusesLayout() != layout))))
-      throw py::value_error(
-          "Reset before changing bus layout, rate or processing API");
+      auto layout = request.layout(*pluginInstance, disableOmitted);
+      if (!shouldReset &&
+          ((!busStreamActive && (scalarHasProcessed || automationActive)) ||
+           (busStreamActive && (busStreamRate != sampleRate ||
+                                pluginInstance->getBusesLayout() != layout))))
+        throw py::value_error(
+            "Reset before changing bus layout, rate or processing API");
+      return layout;
+    };
+    acquire();
+    validate();
+    auto controls = makeControls(request.frames);
     for (const auto &[index, channels] : request.outputs) {
       py::array_t<float> array({channels, request.frames});
       pointers[index] = array.mutable_data();
       arrays.emplace(index, array);
       result[py::int_(index)] = array;
     }
-    if (!request.frames)
+    auto finish = [&]() -> py::object {
+      if (returnMidi)
+        return py::make_tuple(result, messages);
       return result;
+    };
+    if (!request.frames)
+      return finish();
+    // MIDI may be a Python generator that calls back into this plugin. Never
+    // invoke arbitrary iterable code while holding its native mutex.
+    lock.unlock();
+    juce::MidiBuffer inputMidi;
+    if (!midiMessages.is_none())
+      inputMidi = parseMidiBufferFromPython(midiMessages, sampleRate, true);
+    acquire();
+    const auto layout = validate();
+    for (const auto &control : controls)
+      if (control.validateSchema)
+        control.validateSchema();
+    if (!inputMidi.isEmpty() && !pluginInstance->acceptsMidi())
+      throw py::value_error("Plugin does not declare MIDI input support");
+    juce::MidiBuffer outputMidi;
     {
       py::gil_scoped_release release;
       try {
+        const bool continuation = busStreamActive && !shouldReset;
+        for (const auto &control : controls)
+          control.setter(control.values.front());
         if (shouldReset)
           reset();
         if (!busStreamActive) {
           pluginInstance->releaseResources();
-          // VST3 cannot negotiate arrangements while active. Validate all pure
-          // input errors above; native layout negotiation starts a new stream.
           if (!pluginInstance->checkBusesLayoutSupported(layout))
             throw std::invalid_argument(
                 "Plugin does not support the requested bus layout");
@@ -1330,14 +1374,30 @@ public:
             throw std::invalid_argument(
                 "Plugin rejected the requested bus layout");
           }
+          // Initialize targets before preparation (native smoothers may read
+          // their first value here), then re-resolve format-dependent units.
+          for (const auto &control : controls)
+            control.setter(control.values.front());
           pluginInstance->setNonRealtime(true);
           pluginInstance->setRateAndBufferSizeDetails(sampleRate,
                                                       DEFAULT_BUFFER_SIZE);
           pluginInstance->prepareToPlay(sampleRate, DEFAULT_BUFFER_SIZE);
           busStreamActive = true;
           busStreamRate = sampleRate;
-          // Legacy preparation must renegotiate its main-only layout later.
           lastSpec = {0};
+        }
+        std::vector<uint32_t> ids;
+        for (auto &control : controls) {
+          if (control.resolvePrepared)
+            control.resolvePrepared(control, continuation);
+          control.setter(control.values.front());
+          ids.push_back(*control.externalId);
+        }
+        std::vector<juce::PatchedVST3AutomationCurve> curves;
+        if (!controls.empty()) {
+          beginAutomation(ids);
+          for (const auto &control : controls)
+            curves.push_back({*control.externalId, nullptr});
         }
         const int capacity = std::min(bufferSize, DEFAULT_BUFFER_SIZE);
         juce::AudioBuffer<float> scratch(
@@ -1346,7 +1406,11 @@ public:
             capacity);
         juce::MidiBuffer midi;
         for (int start = 0; start < request.frames;) {
-          const int count = std::min(capacity, request.frames - start);
+          int count = std::min(capacity, request.frames - start);
+          if (!controls.empty())
+            count = std::min(
+                (size_t)count,
+                scheduledSpanEnd(start, request.frames, &controls, 0) - start);
           scratch.clear();
           juce::AudioBuffer<float> block(scratch.getArrayOfWritePointers(),
                                          scratch.getNumChannels(), count);
@@ -1356,7 +1420,18 @@ public:
               bus.copyFrom(ch, 0, array.data(ch, start), count);
           }
           midi.clear();
-          pluginInstance->processBlock(block, midi);
+          midi.addEvents(inputMidi, start, count, -start);
+          if (!midi.isEmpty())
+            busMidiHasProcessed = true;
+          if (controls.empty())
+            pluginInstance->processBlock(block, midi);
+          else {
+            for (size_t lane = 0; lane < controls.size(); ++lane)
+              curves[lane].values = controls[lane].values.data() + start;
+            processHostedAutomation(block, midi, curves);
+          }
+          if (returnMidi && pluginInstance->producesMidi())
+            outputMidi.addEvents(midi, 0, count, start);
           for (const auto &[index, channels] : request.outputs) {
             auto bus = pluginInstance->getBusBuffer(block, false, index);
             for (int ch = 0; ch < channels; ++ch)
@@ -1372,7 +1447,11 @@ public:
       }
       lock.unlock();
     }
-    return result;
+    for (const auto event : outputMidi)
+      messages.append(py::make_tuple(
+          py::bytes(reinterpret_cast<const char *>(event.data), event.numBytes),
+          event.samplePosition / sampleRate));
+    return finish();
   }
   void requestAutomation() { automationRequested = true; }
   void beginAutomation(const std::vector<uint32_t> &ids) {
@@ -1918,6 +1997,7 @@ private:
   bool automationRequested = false, automationActive = false;
   bool scalarHasProcessed = false, sampleSteps = true;
   bool busStreamActive = false;
+  bool busMidiHasProcessed = false;
   double busStreamRate = 0;
 
   long samplesProvided = 0;

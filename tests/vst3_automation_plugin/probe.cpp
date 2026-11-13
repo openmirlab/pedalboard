@@ -22,7 +22,7 @@
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 namespace {
-const std::array<FUID, 10> ids = {
+const std::array<FUID, 12> ids = {
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A001),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A002),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A003),
@@ -32,7 +32,9 @@ const std::array<FUID, 10> ids = {
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A007),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A008),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A009),
-    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A00A)};
+    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A00A),
+    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A00B),
+    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A00C)};
 const char *names[] = {"Automation Probe",
                        "Automation Probe Last Point",
                        "Automation Probe Delayed",
@@ -42,7 +44,9 @@ const char *names[] = {"Automation Probe",
                        "Automation Probe Delayed Instrument",
                        "Automation Probe Long Delayed Instrument",
                        "Automation Probe Huge Delayed Instrument",
-                       "Automation Probe Buses"};
+                       "Automation Probe Buses",
+                       "Automation Probe Audio MIDI",
+                       "Automation Probe Delayed Audio MIDI"};
 static_assert(std::size(names) == std::size(ids));
 constexpr ParamID gainId = 0x1001, frequencyId = 0x314159, bypassId = 0xABC,
                   blocksId = 0x998, brokenId = 0x777, misparsedId = 0x999;
@@ -56,16 +60,24 @@ int parameterIndex(ParamID id) {
   return -1;
 }
 
+bool hasBuses(int kind) { return kind >= 9 && kind <= 11; }
+
 bool isInstrument(int kind) { return kind == 3 || (kind >= 6 && kind <= 8); }
 int latency(int kind) {
-  return kind == 2 || kind == 6 ? 20 : kind == 7 ? 4097 : kind == 8 ? 16385 : 0;
+  return kind == 2 || kind == 6 || kind == 11 ? 20
+         : kind == 7                          ? 4097
+         : kind == 8                          ? 16385
+                                              : 0;
 }
 
 class Probe final : public IComponent,
                     public IAudioProcessor,
-                    public IEditController {
+                    public IEditController,
+                    public IMidiMapping {
 public:
   explicit Probe(int kind) : kind(kind) {
+    if (kind >= 10)
+      ui[1] = dsp[1] = 1;
     if (kind == 4)
       ui[0] = dsp[0] = .5;
   }
@@ -79,6 +91,8 @@ public:
       *out = static_cast<IAudioProcessor *>(this);
     else if (FUnknownPrivate::iidEqual(iid, IEditController::iid))
       *out = static_cast<IEditController *>(this);
+    if (kind >= 10 && FUnknownPrivate::iidEqual(iid, IMidiMapping::iid))
+      *out = static_cast<IMidiMapping *>(this);
     if (!*out)
       return kNoInterface;
     addRef();
@@ -99,7 +113,7 @@ public:
   tresult PLUGIN_API setIoMode(IoMode) override { return kResultOk; }
   int32 PLUGIN_API getBusCount(MediaType type,
                                BusDirection direction) override {
-    if (kind == 9)
+    if (hasBuses(kind))
       return type == kAudio ? 2 : 1;
     if (type == kAudio)
       return direction == kOutput || !isInstrument(kind) ? 1 : 0;
@@ -113,8 +127,9 @@ public:
     info.mediaType = type;
     info.direction = direction;
     info.channelCount =
-        type == kAudio ? (kind == 9 ? busChannels[direction][index] : channels)
-                       : 16;
+        type == kAudio
+            ? (hasBuses(kind) ? busChannels[direction][index] : channels)
+            : 16;
     info.busType = index ? kAux : kMain;
     info.flags = BusInfo::kDefaultActive;
     text(info.name,
@@ -129,7 +144,7 @@ public:
   }
   tresult PLUGIN_API activateBus(MediaType type, BusDirection, int32 index,
                                  TBool enabled) override {
-    if (kind == 9 && type == kAudio && index == 0 && !enabled)
+    if (hasBuses(kind) && type == kAudio && index == 0 && !enabled)
       return kResultFalse;
     return kResultOk;
   }
@@ -160,7 +175,7 @@ public:
                                         int32 numInputs,
                                         SpeakerArrangement *outputs,
                                         int32 numOutputs) override {
-    if (kind == 9) {
+    if (hasBuses(kind)) {
       if (numInputs != 2 || numOutputs != 2 || inputs[0] != outputs[0])
         return kResultFalse;
       for (int direction = 0; direction < 2; ++direction)
@@ -187,7 +202,7 @@ public:
   }
   tresult PLUGIN_API getBusArrangement(BusDirection direction, int32 index,
                                        SpeakerArrangement &arr) override {
-    if (kind == 9) {
+    if (hasBuses(kind)) {
       if (index < 0 || index > 1)
         return kInvalidArgument;
       const int count = busChannels[direction][index];
@@ -232,13 +247,13 @@ public:
         hasNext = queue && point < queue->getPointCount() &&
                   queue->getPoint(point++, nextOffset, next) == kResultOk;
       }
-      double at(int32 frame) {
+      double at(int32 frame, bool discrete = false) {
         while (hasNext && nextOffset <= frame) {
           previous = next;
           previousOffset = nextOffset;
           advance();
         }
-        return hasNext
+        return hasNext && !discrete
                    ? previous + (next - previous) * (frame - previousOffset) /
                                     (nextOffset - previousOffset)
                    : previous;
@@ -278,18 +293,28 @@ public:
           note = nextEvent.noteOn.velocity > 0;
         if (nextEvent.type == Event::kNoteOffEvent)
           note = false;
+        if (kind >= 10 && data.outputEvents &&
+            (nextEvent.type == Event::kNoteOnEvent ||
+             nextEvent.type == Event::kNoteOffEvent)) {
+          auto emitted = nextEvent;
+          if (emitted.type == Event::kNoteOnEvent)
+            emitted.noteOn.pitch += 12;
+          else
+            emitted.noteOff.pitch += 12;
+          data.outputEvents->addEvent(emitted);
+        }
         hasEvent =
             ++eventIndex < eventCount &&
             data.inputEvents->getEvent(eventIndex, nextEvent) == kResultOk;
       }
       for (int p = 0; p < 6; ++p)
-        dsp[p] = controls[p].at(i);
+        dsp[p] = controls[p].at(i, kind >= 10 && p == 2);
       const double gain =
           kind == 4
               ? 2 * dsp[0]
               : std::pow(10.0, normalizedParamToPlain(gainId, dsp[0]) / 20.0);
       const double frequency = normalizedParamToPlain(frequencyId, dsp[1]);
-      if (kind == 9) {
+      if (hasBuses(kind)) {
         const float key = data.numInputs > 1 && data.inputs[1].numChannels
                               ? data.inputs[1].channelBuffers32[0][i]
                               : 0;
@@ -302,8 +327,20 @@ public:
           for (int c = 0; c < data.outputs[1].numChannels; ++c)
             data.outputs[1].channelBuffers32[c][i] =
                 .5f * source[c % data.inputs[0].numChannels];
-        for (int c = 0; c < data.outputs[0].numChannels; ++c)
-          data.outputs[0].channelBuffers32[c][i] = source[c] * duck;
+        for (int c = 0; c < data.outputs[0].numChannels; ++c) {
+          float value = kind >= 10 && dsp[2] >= .5 ? source[c]
+                        : kind == 9
+                            ? source[c] * duck
+                            : (float)(source[c] * duck * (note ? 1 : 0) * gain *
+                                      frequency / 20000.0);
+          if (latency(kind)) {
+            const float old = delay[c][position];
+            delay[c][position] = value;
+            value = old;
+          }
+          data.outputs[0].channelBuffers32[c][i] = value;
+        }
+        position = (position + 1) % std::max(20, latency(kind));
         continue;
       }
       for (int32 c = 0; data.numOutputs && c < data.outputs[0].numChannels;
@@ -324,13 +361,23 @@ public:
     }
     // Returned MIDI must never become input to a later host sub-block. An
     // accidental reuse of these note-offs would cut subsequent held notes.
-    if (isInstrument(kind) && data.outputEvents && data.numSamples > 0) {
+    if ((isInstrument(kind) || kind >= 10) && data.outputEvents &&
+        data.numSamples > 0) {
       Event event{};
       event.type = Event::kNoteOffEvent;
       event.noteOff.pitch = 60;
       event.noteOff.noteId = -1;
       data.outputEvents->addEvent(event);
     }
+    return kResultOk;
+  }
+
+  tresult PLUGIN_API getMidiControllerAssignment(int32 bus, int16 channel,
+                                                 CtrlNumber number,
+                                                 ParamID &id) override {
+    if (kind < 10 || bus != 0 || channel != 0 || number != 1)
+      return kResultFalse;
+    id = bypassId;
     return kResultOk;
   }
 

@@ -1554,6 +1554,11 @@ class AudioUnitPlugin(ExternalPlugin):
     def audio_buses(self) -> typing.Dict[str, typing.List[typing.Dict[str, typing.Any]]]:
         """Fresh input/output bus indices, names, enabled state and channel layouts."""
 
+    @property
+    def midi_capabilities(self) -> typing.Dict[str, bool]:
+        """Declared MIDI input/output support, not proof of event consumption."""
+
+    @_typing_overload
     def process_buses(
         self,
         input_buses: typing.Dict[int, NDArray[float32] | NDArray[float64]],
@@ -1563,8 +1568,40 @@ class AudioUnitPlugin(ExternalPlugin):
         num_frames: int | None = None,
         buffer_size: int = 8192,
         reset: bool = True,
-    ) -> typing.Dict[int, NDArray[float32]]:
-        """Route explicit planar buses, returning independent raw-latency output arrays."""
+        midi_messages: typing.Iterable[MIDIMessageLike] | None = None,
+        automation: typing.Dict[str, NDArray] | None = None,
+        return_midi: typing.Literal[False] = False,
+    ) -> typing.Dict[int, NDArray[float32]]: ...
+
+    @_typing_overload
+    def process_buses(
+        self,
+        input_buses: typing.Dict[int, NDArray[float32] | NDArray[float64]],
+        sample_rate: float | int,
+        *,
+        output_buses: typing.Dict[int, int],
+        num_frames: int | None = None,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        midi_messages: typing.Iterable[MIDIMessageLike] | None = None,
+        automation: typing.Dict[str, NDArray] | None = None,
+        return_midi: typing.Literal[True],
+    ) -> typing.Tuple[typing.Dict[int, NDArray[float32]], typing.List[typing.Tuple[bytes, float]]]: ...
+
+    @_typing_overload
+    def process_buses(
+        self,
+        input_buses: typing.Dict[int, NDArray[float32] | NDArray[float64]],
+        sample_rate: float | int,
+        *,
+        output_buses: typing.Dict[int, int],
+        num_frames: int | None = None,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        midi_messages: typing.Iterable[MIDIMessageLike] | None = None,
+        automation: typing.Dict[str, NDArray] | None = None,
+        return_midi: bool = False,
+    ) -> typing.Union[typing.Dict[int, NDArray[float32]], typing.Tuple[typing.Dict[int, NDArray[float32]], typing.List[typing.Tuple[bytes, float]]]]: ...
 
     def _configuration_snapshot(self, include_state: bool = True) -> typing.Dict[str, typing.Any]: ...
     def _configuration_restore(self, data: bytes, rate: float, channels: int) -> None: ...
@@ -2357,6 +2394,11 @@ class VST3Plugin(ExternalPlugin):
     def audio_buses(self) -> typing.Dict[str, typing.List[typing.Dict[str, typing.Any]]]:
         """Fresh input/output bus indices, names, enabled state and channel layouts."""
 
+    @property
+    def midi_capabilities(self) -> typing.Dict[str, bool]:
+        """Declared MIDI input/output support, not proof of event consumption."""
+
+    @_typing_overload
     def process_buses(
         self,
         input_buses: typing.Dict[int, NDArray[float32] | NDArray[float64]],
@@ -2366,8 +2408,40 @@ class VST3Plugin(ExternalPlugin):
         num_frames: int | None = None,
         buffer_size: int = 8192,
         reset: bool = True,
-    ) -> typing.Dict[int, NDArray[float32]]:
-        """Route explicit planar buses, returning independent raw-latency output arrays."""
+        midi_messages: typing.Iterable[MIDIMessageLike] | None = None,
+        automation: typing.Dict[str, NDArray] | None = None,
+        return_midi: typing.Literal[False] = False,
+    ) -> typing.Dict[int, NDArray[float32]]: ...
+
+    @_typing_overload
+    def process_buses(
+        self,
+        input_buses: typing.Dict[int, NDArray[float32] | NDArray[float64]],
+        sample_rate: float | int,
+        *,
+        output_buses: typing.Dict[int, int],
+        num_frames: int | None = None,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        midi_messages: typing.Iterable[MIDIMessageLike] | None = None,
+        automation: typing.Dict[str, NDArray] | None = None,
+        return_midi: typing.Literal[True],
+    ) -> typing.Tuple[typing.Dict[int, NDArray[float32]], typing.List[typing.Tuple[bytes, float]]]: ...
+
+    @_typing_overload
+    def process_buses(
+        self,
+        input_buses: typing.Dict[int, NDArray[float32] | NDArray[float64]],
+        sample_rate: float | int,
+        *,
+        output_buses: typing.Dict[int, int],
+        num_frames: int | None = None,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        midi_messages: typing.Iterable[MIDIMessageLike] | None = None,
+        automation: typing.Dict[str, NDArray] | None = None,
+        return_midi: bool = False,
+    ) -> typing.Union[typing.Dict[int, NDArray[float32]], typing.Tuple[typing.Dict[int, NDArray[float32]], typing.List[typing.Tuple[bytes, float]]]]: ...
 
     def _configuration_snapshot(self, include_state: bool = True) -> typing.Dict[str, typing.Any]: ...
     def _configuration_restore(self, data: bytes, rate: float, channels: int) -> None: ...
