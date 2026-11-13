@@ -27,7 +27,11 @@ int latency(int kind) {
 class Probe : public MusicDeviceBase {
 public:
   explicit Probe(AudioComponentInstance instance)
-      : MusicDeviceBase(instance, isInstrument(kindOf(instance)) ? 0 : 1, 1),
+      : MusicDeviceBase(instance,
+                        kindOf(instance) == 9            ? 2
+                        : isInstrument(kindOf(instance)) ? 0
+                                                         : 1,
+                        kindOf(instance) == 9 ? 2 : 1),
         kind(kindOf(instance)) {
     CreateElements();
     Globals()->SetParameter(gainId, kind == 4 ? 1 : 0);
@@ -42,6 +46,12 @@ public:
     return true;
   }
   UInt32 SupportedNumChannels(const AUChannelInfo **out) override {
+    if (kind == 9) {
+      static const AUChannelInfo buses[] = {{1, 1}, {1, 2}, {2, 1}, {2, 2}};
+      if (out)
+        *out = buses;
+      return 4;
+    }
     static const AUChannelInfo effect[] = {{1, 1}, {2, 2}};
     static const AUChannelInfo instrument[] = {{0, 1}, {0, 2}};
     if (out)
@@ -167,6 +177,35 @@ public:
   }
   OSStatus Render(AudioUnitRenderActionFlags &flags, const AudioTimeStamp &time,
                   UInt32 frames) override {
+    if (kind == 9) {
+      for (int bus = 0; bus < 2; ++bus) {
+        const auto status = PullInput(bus, flags, time, frames);
+        if (status != noErr)
+          return status;
+      }
+      // RenderBus calls Render once per timestamp; initialize every output.
+      GetOutput(1)->PrepareBuffer(frames);
+      const auto &main = GetInput(0)->GetBufferList();
+      const auto &key = GetInput(1)->GetBufferList();
+      auto &output = GetOutput(0)->GetBufferList();
+      auto &aux = GetOutput(1)->GetBufferList();
+      for (UInt32 i = 0; i < frames; ++i) {
+        const float duck =
+            std::abs(static_cast<float *>(key.mBuffers[0].mData)[i]) > .5f
+                ? .25f
+                : 1.f;
+        for (UInt32 c = 0; c < aux.mNumberBuffers; ++c)
+          static_cast<float *>(aux.mBuffers[c].mData)[i] =
+              .5f * static_cast<float *>(
+                        main.mBuffers[c % main.mNumberBuffers].mData)[i];
+        for (UInt32 c = 0; c < output.mNumberBuffers; ++c)
+          static_cast<float *>(output.mBuffers[c].mData)[i] =
+              duck * static_cast<float *>(
+                         main.mBuffers[c % main.mNumberBuffers].mData)[i];
+      }
+      Globals()->SetParameter(blocksId, ++blocks);
+      return noErr;
+    }
     if (!isInstrument(kind)) {
       const auto status = PullInput(0, flags, time, frames);
       if (status != noErr)

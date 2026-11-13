@@ -15,7 +15,7 @@ and component subtypes depend on the build directory. The helper refuses to repl
 preexisting entries and unregisters its own entries at teardown. It uses no GUI,
 network, App Store account or private signing key.
 
-The extension principal class implements AUAudioUnitFactory. Six components share
+The extension principal class implements AUAudioUnitFactory. Eight components share
 known DSP: a direct effect, a20-sample delayed effect, a note-gated instrument and
 three instruments delayed by20/4097/16385 reported samples.
 Each test uses the public AudioUnitPlugin API in a subprocess with a30-second bound;
@@ -31,7 +31,7 @@ checking that the legacy AU bridge does not truncate controls into the wrong nod
 
 Analytical tests use the same physical float32 oracle as the AUv2 suite, with3e-7
 absolute/relative error bounds. Partition/reset/hold comparisons require exact
-output equality. Tests cover six component descriptions in one extension, relative/
+output equality. Tests cover eight component descriptions in one extension, relative/
 absolute/trailing-slash/symlink/Unicode paths, dB/Hz/boolean curves, reported latency,
 MIDI offsets/holds, graph queues, owned/omitted lanes, state and reinstantiation.
 Native scheduled events, third-party AUv3 vendor compatibility and GUI behavior are
@@ -53,3 +53,12 @@ floor, no DSP render occurs for tested1–16-frame capacities, although curves o
 an8192-frame prepared engine work. Native AU flags exclude read-only counters from
 configuration comparisons even when JUCE's generic automatable flag is permissive.
 This remains source-built host acceptance, not third-party vendor or GUI acceptance.
+
+`tests/test_auv3_hosted_audio.py` exercises two additional components: **Buses**
+has independent main/key inputs and main/aux outputs; **Bus Identity** always
+emits the render-process PID on both output buses without relying on setters.
+Their multi-output DSP requires distinct input/output memory and declares
+`canProcessInPlace=NO`. Tests verify actual remote identity, asymmetric mono/stereo
+layouts,44.1/48kHz,1/31/8192-frame spans, split streams and silent unconnected
+inputs. The Render Bus Mask readonly meter records which native output callbacks
+ran. This is a diagnostic extension, not commercial-vendor certification.

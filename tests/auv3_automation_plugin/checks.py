@@ -55,6 +55,8 @@ def check(path, case):
                 "AUv3 Automation Delayed Instrument",
                 "AUv3 Automation Long Delayed Instrument",
                 "AUv3 Automation Huge Delayed Instrument",
+                "AUv3 Automation Buses",
+                "AUv3 Automation Bus Identity",
             ]
         )
         return {"names": names}

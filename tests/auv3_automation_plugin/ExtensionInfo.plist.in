@@ -150,6 +150,26 @@
 					<key>version</key>
 					<integer>65536</integer>
 				</dict>
+                <dict>
+                    <key>description</key><string>AUv3 Automation Buses</string>
+                    <key>manufacturer</key><string>OMrl</string>
+                    <key>name</key><string>OpenMIRLab: AUv3 Automation Buses</string>
+                    <key>sandboxSafe</key><true/>
+                    <key>subtype</key><string>@PROBE_PREFIX@6</string>
+                    <key>tags</key><array><string>Effects</string></array>
+                    <key>type</key><string>aumf</string>
+                    <key>version</key><integer>65536</integer>
+                </dict>
+                <dict>
+                    <key>description</key><string>AUv3 Automation Bus Identity</string>
+                    <key>manufacturer</key><string>OMrl</string>
+                    <key>name</key><string>OpenMIRLab: AUv3 Automation Bus Identity</string>
+                    <key>sandboxSafe</key><true/>
+                    <key>subtype</key><string>@PROBE_PREFIX@7</string>
+                    <key>tags</key><array><string>Effects</string></array>
+                    <key>type</key><string>aumf</string>
+                    <key>version</key><integer>65536</integer>
+                </dict>
 			</array>
 		</dict>
 		<key>NSExtensionPointIdentifier</key>

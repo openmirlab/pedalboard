@@ -363,6 +363,19 @@ inline void initHostedAutomation(py::module &module, const char *className) {
   auto binding = py::reinterpret_borrow<
       py::class_<Effect, AbstractExternalPlugin, std::shared_ptr<Effect>>>(
       module.attr(className));
+  binding.def_property_readonly("audio_buses", &Effect::getAudioBuses,
+                                "Fresh input/output audio bus metadata; "
+                                "indices are routing identifiers.");
+  binding.def(
+      "process_buses", &Effect::processBuses, py::arg("input_buses"),
+      py::arg("sample_rate"), py::kw_only(), py::arg("output_buses"),
+      py::arg("num_frames") = py::none(),
+      py::arg("buffer_size") = DEFAULT_BUFFER_SIZE, py::arg("reset") = true,
+      "Route planar arrays through explicit audio buses. Return a dict from "
+      "output bus index to planar float32 audio, with raw plugin latency. "
+      "Omitted VST3 buses are disabled; omitted AU inputs receive silence. "
+      "Layouts must be jointly supported. "
+      "Reset before changing routing, rate or processing API.");
   binding.def(
       "prepare_automation",
       [](std::shared_ptr<Effect> self, double rate, unsigned int channels) {

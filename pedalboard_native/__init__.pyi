@@ -1550,6 +1550,22 @@ class PitchShift(Plugin):
     pass
 
 class AudioUnitPlugin(ExternalPlugin):
+    @property
+    def audio_buses(self) -> typing.Dict[str, typing.List[typing.Dict[str, typing.Any]]]:
+        """Fresh input/output bus indices, names, enabled state and channel layouts."""
+
+    def process_buses(
+        self,
+        input_buses: typing.Dict[int, NDArray[float32] | NDArray[float64]],
+        sample_rate: float | int,
+        *,
+        output_buses: typing.Dict[int, int],
+        num_frames: int | None = None,
+        buffer_size: int = 8192,
+        reset: bool = True,
+    ) -> typing.Dict[int, NDArray[float32]]:
+        """Route explicit planar buses, returning independent raw-latency output arrays."""
+
     def _configuration_snapshot(self, include_state: bool = True) -> typing.Dict[str, typing.Any]: ...
     def _configuration_restore(self, data: bytes, rate: float, channels: int) -> None: ...
 
@@ -2337,6 +2353,22 @@ class Reverb(Plugin):
     pass
 
 class VST3Plugin(ExternalPlugin):
+    @property
+    def audio_buses(self) -> typing.Dict[str, typing.List[typing.Dict[str, typing.Any]]]:
+        """Fresh input/output bus indices, names, enabled state and channel layouts."""
+
+    def process_buses(
+        self,
+        input_buses: typing.Dict[int, NDArray[float32] | NDArray[float64]],
+        sample_rate: float | int,
+        *,
+        output_buses: typing.Dict[int, int],
+        num_frames: int | None = None,
+        buffer_size: int = 8192,
+        reset: bool = True,
+    ) -> typing.Dict[int, NDArray[float32]]:
+        """Route explicit planar buses, returning independent raw-latency output arrays."""
+
     def _configuration_snapshot(self, include_state: bool = True) -> typing.Dict[str, typing.Any]: ...
     def _configuration_restore(self, data: bytes, rate: float, channels: int) -> None: ...
 

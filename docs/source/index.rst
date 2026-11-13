@@ -21,6 +21,7 @@ Documentation
    examples
    configuration
    instrument_latency
+   hosting
    faq
    compatibility
    internals

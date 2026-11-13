@@ -17,14 +17,18 @@ constexpr AUParameterAddress instanceAddress = 0x999;
 constexpr AUParameterAddress identityAddress = 0xFA;
 constexpr AUParameterAddress lowAddress = 2;
 constexpr AUParameterAddress framesAddress = 0x99A, capacityAddress = 0x99B;
+constexpr AUParameterAddress busMaskAddress = 0x99C;
 std::atomic<unsigned> nextInstance{1};
 struct DSP {
   std::atomic<float> gain{0}, frequency{20}, pass{0}, identity{0}, decoy{0};
   std::atomic<unsigned> renderFrames{0}, renderCapacity{0};
+  std::atomic<unsigned> renderBusMask{0};
   bool note = false;
   unsigned position = 0;
   std::array<std::array<float, 16385>, 2> delay{};
+  std::array<std::array<float, 8192>, 4> busInput{};
   void clear() {
+    renderBusMask.store(0);
     note = false;
     position = 0;
     for (auto &channel : delay)
@@ -41,6 +45,7 @@ struct DSP {
   DSP _dsp;
   unsigned _instance;
   BOOL _instrument;
+  BOOL _multipleBuses, _busIdentity;
   unsigned _latency;
 }
 - (instancetype)
@@ -54,6 +59,8 @@ struct DSP {
     return nil;
   _instrument = description.componentType == kAudioUnitType_MusicDevice;
   const auto variant = description.componentSubType & 255;
+  _multipleBuses = variant == '6' || variant == '7';
+  _busIdentity = variant == '7';
   _latency = variant == '1' || variant == '3' ? 20
              : variant == '4'                 ? 4097
              : variant == '5'                 ? 16385
@@ -67,14 +74,20 @@ struct DSP {
                                                             error:error];
   if (!input || !output)
     return nil;
+  AUAudioUnitBus *key = [[AUAudioUnitBus alloc] initWithFormat:format
+                                                         error:error];
+  AUAudioUnitBus *aux = [[AUAudioUnitBus alloc] initWithFormat:format
+                                                         error:error];
   _inputs = [[AUAudioUnitBusArray alloc]
       initWithAudioUnit:self
                 busType:AUAudioUnitBusTypeInput
-                 busses:_instrument ? @[] : @[ input ]];
-  _outputs =
-      [[AUAudioUnitBusArray alloc] initWithAudioUnit:self
-                                             busType:AUAudioUnitBusTypeOutput
-                                              busses:@[ output ]];
+                 busses:_instrument      ? @[]
+                        : _multipleBuses ? @[ input, key ]
+                                         : @[ input ]];
+  _outputs = [[AUAudioUnitBusArray alloc]
+      initWithAudioUnit:self
+                busType:AUAudioUnitBusTypeOutput
+                 busses:_multipleBuses ? @[ output, aux ] : @[ output ]];
   auto make = ^AUParameter *(
       NSString *identifier, NSString *name, AUParameterAddress address,
       AUValue low, AUValue high, AudioUnitParameterUnit unit, BOOL writable) {
@@ -113,15 +126,21 @@ struct DSP {
   AUParameter *capacity =
       make(@"render_capacity", @"Render Capacity", capacityAddress, 0, 1e9,
            kAudioUnitParameterUnit_Generic, NO);
+  AUParameter *busMask =
+      make(@"render_bus_mask", @"Render Bus Mask", busMaskAddress, 0, 3,
+           kAudioUnitParameterUnit_Generic, NO);
   identity.value = decoy.value = 0;
   gain.value = 0;
   frequency.value = 20;
   pass.value = 0;
   pid.value = getpid();
   instance.value = _instance;
-  _parameters = [AUParameterTree createTreeWithChildren:@[
+  NSMutableArray *children = [@[
     gain, frequency, pass, pid, instance, identity, decoy, frames, capacity
-  ]];
+  ] mutableCopy];
+  if (_multipleBuses)
+    [children addObject:busMask];
+  _parameters = [AUParameterTree createTreeWithChildren:children];
   DSP *dsp = &_dsp;
   const float creatorPID = getpid(), instanceID = _instance;
   _parameters.implementorValueObserver =
@@ -166,6 +185,8 @@ struct DSP {
       return dsp->renderFrames.load();
     case capacityAddress:
       return dsp->renderCapacity.load();
+    case busMaskAddress:
+      return dsp->renderBusMask.load();
     default:
       return 0;
     }
@@ -188,10 +209,12 @@ struct DSP {
   return _parameters;
 }
 - (NSArray<NSNumber *> *)channelCapabilities {
+  if (_multipleBuses)
+    return @[ @1, @1, @1, @2, @2, @1, @2, @2 ];
   return _instrument ? @[ @0, @1, @0, @2 ] : @[ @1, @1, @2, @2 ];
 }
 - (BOOL)canProcessInPlace {
-  return YES;
+  return !_multipleBuses;
 }
 - (NSTimeInterval)latency {
   return (double)_latency / _outputs[0].format.sampleRate;
@@ -226,6 +249,12 @@ struct DSP {
 - (AUInternalRenderBlock)internalRenderBlock {
   DSP *dsp = &_dsp;
   const BOOL instrument = _instrument;
+  const BOOL multipleBuses = _multipleBuses;
+  const BOOL busIdentity = _busIdentity;
+  const unsigned mainChannels =
+      _instrument ? 0 : _inputs[0].format.channelCount;
+  const unsigned keyChannels =
+      _multipleBuses ? _inputs[1].format.channelCount : 0;
   const unsigned latency = _latency;
   const AUAudioFrameCount capacity = self.maximumFramesToRender;
   return ^AUAudioUnitStatus(
@@ -234,8 +263,44 @@ struct DSP {
       const AURenderEvent *events, AURenderPullInputBlock pull) {
     dsp->renderFrames.store(frames);
     dsp->renderCapacity.store(capacity);
+    dsp->renderBusMask.fetch_or(1u << bus);
     if (frames > capacity)
       return (AUAudioUnitStatus)kAudioUnitErr_TooManyFramesToProcess;
+    if (multipleBuses) {
+      if (!pull || frames > 8192 || mainChannels > 2 || keyChannels > 2 ||
+          bus > 1)
+        return (AUAudioUnitStatus)kAudioUnitErr_FormatNotSupported;
+      struct TwoBuffers {
+        UInt32 mNumberBuffers;
+        AudioBuffer mBuffers[2];
+      } sources[2]{};
+      for (unsigned index = 0; index < 2; ++index) {
+        auto &source = sources[index];
+        source.mNumberBuffers = index ? keyChannels : mainChannels;
+        for (unsigned c = 0; c < source.mNumberBuffers; ++c) {
+          source.mBuffers[c].mNumberChannels = 1;
+          source.mBuffers[c].mDataByteSize = frames * sizeof(float);
+          source.mBuffers[c].mData = dsp->busInput[index * 2 + c].data();
+        }
+        const auto status = pull(flags, timestamp, frames, index,
+                                 reinterpret_cast<AudioBufferList *>(&source));
+        if (status != noErr)
+          return status;
+      }
+      for (UInt32 c = 0; c < output->mNumberBuffers; ++c) {
+        auto *target = static_cast<float *>(output->mBuffers[c].mData);
+        const auto *source = static_cast<const float *>(
+            sources[0].mBuffers[c % mainChannels].mData);
+        const auto *keySource =
+            static_cast<const float *>(sources[1].mBuffers[0].mData);
+        for (UInt32 i = 0; i < frames; ++i)
+          target[i] =
+              busIdentity ? (float)getpid()
+              : bus ? source[i] * .5f
+                    : source[i] * (std::abs(keySource[i]) > .5f ? .25f : 1.f);
+      }
+      return (AUAudioUnitStatus)noErr;
+    }
     if (!instrument) {
       if (!pull)
         return (AUAudioUnitStatus)kAudioUnitErr_NoConnection;

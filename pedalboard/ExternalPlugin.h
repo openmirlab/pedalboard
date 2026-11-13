@@ -28,6 +28,7 @@
 #include "AudioUnitParser.h"
 #include "Plugin.h"
 #include "au_automation_bridge.h"
+#include "hosted_audio.h"
 #include <atomic>
 #include <pybind11/stl.h>
 
@@ -1129,6 +1130,7 @@ public:
                                  "use reset=False on worker threads");
       // Reinstantiation may call prepare() internally with an invalidated
       // channel cache. This is a reset, not an illegal streaming format change.
+      busStreamActive = false;
       automationActive = false;
       switch (reloadType) {
       case ExternalPluginReloadType::ClearsAudioOnReset:
@@ -1164,6 +1166,9 @@ public:
    * been reset.
    */
   void prepare(const juce::dsp::ProcessSpec &requestedSpec) override {
+    if (busStreamActive)
+      throw std::invalid_argument("Reset before switching from process_buses "
+                                  "to convenience processing");
     auto spec = requestedSpec;
     if (automationActive && (spec.sampleRate != lastSpec.sampleRate ||
                              spec.numChannels != lastSpec.numChannels))
@@ -1258,6 +1263,117 @@ public:
   }
 
   juce::AudioPluginInstance &automationInstance() { return *pluginInstance; }
+  py::dict getAudioBuses() {
+    std::unique_lock<std::mutex> lock(this->mutex, std::defer_lock);
+    {
+      py::gil_scoped_release release;
+      lock.lock();
+    }
+    return hostedAudioBuses(*pluginInstance);
+  }
+
+  py::dict processBuses(py::dict inputs, double sampleRate, py::dict outputs,
+                        py::object numFrames, int bufferSize,
+                        bool shouldReset) {
+    HostedAudioRequest request(inputs, outputs, numFrames, sampleRate,
+                               bufferSize);
+    // Python objects and output arrays stay alive until after GIL
+    // reacquisition. Layout negotiation and all processing share the ordinary
+    // plugin lock.
+    py::dict result;
+    std::map<int, py::array_t<float>> arrays;
+    std::map<int, float *> pointers;
+    std::unique_lock<std::mutex> lock(this->mutex, std::defer_lock);
+    {
+      py::gil_scoped_release release;
+      lock.lock();
+    }
+    // The inherited AU host cannot disable buses; retain their channel layouts
+    // and supply silence/discard unrequested outputs instead.
+    bool disableOmitted = true;
+#if JUCE_MAC && JUCE_PLUGINHOST_AU
+    if constexpr (std::is_same_v<ExternalPluginType,
+                                 juce::AudioUnitPluginFormat>)
+      disableOmitted = false;
+#endif
+    const auto layout = request.layout(*pluginInstance, disableOmitted);
+    if (!shouldReset &&
+        ((!busStreamActive && (scalarHasProcessed || automationActive)) ||
+         (busStreamActive && (busStreamRate != sampleRate ||
+                              pluginInstance->getBusesLayout() != layout))))
+      throw py::value_error(
+          "Reset before changing bus layout, rate or processing API");
+    for (const auto &[index, channels] : request.outputs) {
+      py::array_t<float> array({channels, request.frames});
+      pointers[index] = array.mutable_data();
+      arrays.emplace(index, array);
+      result[py::int_(index)] = array;
+    }
+    if (!request.frames)
+      return result;
+    {
+      py::gil_scoped_release release;
+      try {
+        if (shouldReset)
+          reset();
+        if (!busStreamActive) {
+          pluginInstance->releaseResources();
+          // VST3 cannot negotiate arrangements while active. Validate all pure
+          // input errors above; native layout negotiation starts a new stream.
+          if (!pluginInstance->checkBusesLayoutSupported(layout))
+            throw std::invalid_argument(
+                "Plugin does not support the requested bus layout");
+          const auto previous = pluginInstance->getBusesLayout();
+          if (!pluginInstance->setBusesLayout(layout) ||
+              pluginInstance->getBusesLayout() != layout) {
+            pluginInstance->setBusesLayout(previous);
+            throw std::invalid_argument(
+                "Plugin rejected the requested bus layout");
+          }
+          pluginInstance->setNonRealtime(true);
+          pluginInstance->setRateAndBufferSizeDetails(sampleRate,
+                                                      DEFAULT_BUFFER_SIZE);
+          pluginInstance->prepareToPlay(sampleRate, DEFAULT_BUFFER_SIZE);
+          busStreamActive = true;
+          busStreamRate = sampleRate;
+          // Legacy preparation must renegotiate its main-only layout later.
+          lastSpec = {0};
+        }
+        const int capacity = std::min(bufferSize, DEFAULT_BUFFER_SIZE);
+        juce::AudioBuffer<float> scratch(
+            std::max(pluginInstance->getTotalNumInputChannels(),
+                     pluginInstance->getTotalNumOutputChannels()),
+            capacity);
+        juce::MidiBuffer midi;
+        for (int start = 0; start < request.frames;) {
+          const int count = std::min(capacity, request.frames - start);
+          scratch.clear();
+          juce::AudioBuffer<float> block(scratch.getArrayOfWritePointers(),
+                                         scratch.getNumChannels(), count);
+          for (const auto &[index, array] : request.inputs) {
+            auto bus = pluginInstance->getBusBuffer(block, true, index);
+            for (int ch = 0; ch < bus.getNumChannels(); ++ch)
+              bus.copyFrom(ch, 0, array.data(ch, start), count);
+          }
+          midi.clear();
+          pluginInstance->processBlock(block, midi);
+          for (const auto &[index, channels] : request.outputs) {
+            auto bus = pluginInstance->getBusBuffer(block, false, index);
+            for (int ch = 0; ch < channels; ++ch)
+              std::copy_n(bus.getReadPointer(ch), count,
+                          pointers.at(index) + (size_t)ch * request.frames +
+                              start);
+          }
+          start += count;
+        }
+      } catch (...) {
+        lock.unlock();
+        throw;
+      }
+      lock.unlock();
+    }
+    return result;
+  }
   void requestAutomation() { automationRequested = true; }
   void beginAutomation(const std::vector<uint32_t> &ids) {
     if (!automationActive)
@@ -1371,7 +1487,11 @@ public:
     }
 
     AudioProcessWorkspace workspace;
-    workspace.numChannels = pluginInstance->getTotalNumOutputChannels();
+    // AU may keep required sidechain inputs enabled even on the convenience
+    // path. Give them real silent storage, including after an explicit route.
+    workspace.numChannels =
+        std::max(pluginInstance->getTotalNumInputChannels(),
+                 pluginInstance->getTotalNumOutputChannels());
     if (workspace.numChannels > workspace.inlineChannels.size())
       workspace.overflowChannels.resize(workspace.numChannels);
     workspace.scratch.resize(workspace.numChannels -
@@ -1797,6 +1917,8 @@ private:
 #endif
   bool automationRequested = false, automationActive = false;
   bool scalarHasProcessed = false, sampleSteps = true;
+  bool busStreamActive = false;
+  double busStreamRate = 0;
 
   long samplesProvided = 0;
   float initializationTimeout = DEFAULT_INITIALIZATION_TIMEOUT_SECONDS;
