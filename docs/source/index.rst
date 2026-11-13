@@ -19,6 +19,7 @@ Documentation
 
 .. toctree::
    examples
+   configuration
    faq
    compatibility
    internals

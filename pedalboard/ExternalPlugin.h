@@ -1616,6 +1616,8 @@ public:
     return outputArray;
   }
 
+  const juce::String &configurationPath() const { return pathToPluginFile; }
+
   void getState(juce::MemoryBlock &dest) const {
     pluginInstance->getStateInformation(dest);
   }

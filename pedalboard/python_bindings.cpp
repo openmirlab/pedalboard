@@ -41,6 +41,7 @@ namespace py = pybind11;
 
 #include "au_automation.h"
 #include "chain_automation.h"
+#include "configuration_support.h"
 #include "plugins/AddLatency.h"
 #include "plugins/Bitcrush.h"
 #include "plugins/BrickwallLimiter.h"
@@ -239,6 +240,7 @@ If the number of samples and the number of channels are the same, each
   init_external_plugins(m);
   init_vst3_automation(m);
   init_au_automation(m);
+  init_configuration_support(m);
 
   // Classes that don't perform any audio effects, but that add other utilities:
   py::module utils = m.def_submodule("utils");
