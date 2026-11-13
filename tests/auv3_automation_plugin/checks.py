@@ -48,7 +48,14 @@ def check(path, case):
             supplied = str(alias)
         names = AudioUnitPlugin.get_plugin_names_for_file(supplied)
         assert sorted(names) == sorted(
-            ["AUv3 Automation Probe", "AUv3 Automation Delayed", "AUv3 Automation Instrument"]
+            [
+                "AUv3 Automation Probe",
+                "AUv3 Automation Delayed",
+                "AUv3 Automation Instrument",
+                "AUv3 Automation Delayed Instrument",
+                "AUv3 Automation Long Delayed Instrument",
+                "AUv3 Automation Huge Delayed Instrument",
+            ]
         )
         return {"names": names}
     if case == "unregistered":

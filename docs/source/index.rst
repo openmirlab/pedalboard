@@ -20,6 +20,7 @@ Documentation
 .. toctree::
    examples
    configuration
+   instrument_latency
    faq
    compatibility
    internals

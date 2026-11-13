@@ -23,6 +23,14 @@ struct AudioUnitAutomationBackend {
       throw std::invalid_argument("Audio Unit has no native instance");
     return au;
   }
+  static bool isV3Instance(juce::AudioPluginInstance &p) {
+    AudioComponentDescription component{};
+    if (AudioComponentGetDescription(
+            AudioComponentInstanceGetComponent(handle(p)), &component) != noErr)
+      throw std::invalid_argument(
+          "Audio Unit component description is unavailable");
+    return (component.componentFlags & kAudioComponentFlag_IsV3AudioUnit) != 0;
+  }
   static Parameter describeById(juce::AudioPluginInstance &p, uint32_t id) {
     AudioUnitParameterInfo info{};
     UInt32 size = sizeof(info);
@@ -69,11 +77,6 @@ struct AudioUnitAutomationBackend {
       throw std::invalid_argument(
           "Audio Unit has no finite increasing parameter range");
     const double steps = (double)info.maxValue - info.minValue + 1;
-    AudioComponentDescription component{};
-    if (AudioComponentGetDescription(
-            AudioComponentInstanceGetComponent(handle(p)), &component) != noErr)
-      throw std::invalid_argument(
-          "Audio Unit component description is unavailable");
     return {id,
             name,
             units,
@@ -84,11 +87,10 @@ struct AudioUnitAutomationBackend {
             info.maxValue,
             info.flags,
             info.unit,
-            (component.componentFlags & kAudioComponentFlag_IsV3AudioUnit) !=
-                0};
+            isV3Instance(p)};
   }
 
-  static Parameter describe(juce::AudioPluginInstance &p, int index) {
+  static uint32_t parameterId(juce::AudioPluginInstance &p, int index) {
     auto *parameter = p.getHostedParameter(index);
     if (!parameter)
       throw std::invalid_argument("Audio Unit has no stable parameter ID");
@@ -98,7 +100,25 @@ struct AudioUnitAutomationBackend {
     if (consumed != string.size() || id > UINT32_MAX)
       throw std::invalid_argument(
           "Audio Unit parameter ID is not a global UInt32 ID");
-    return describeById(p, (uint32_t)id);
+    return (uint32_t)id;
+  }
+  static bool isAutomatable(juce::AudioPluginInstance &p, int index) {
+    AudioUnitParameterInfo info{};
+    UInt32 size = sizeof(info);
+    if (AudioUnitGetProperty(handle(p), kAudioUnitProperty_ParameterInfo,
+                             kAudioUnitScope_Global, parameterId(p, index),
+                             &info, &size) != noErr)
+      throw std::invalid_argument("Audio Unit parameter flags are unavailable");
+    const bool writable = (info.flags & kAudioUnitParameterFlag_IsWritable) &&
+                          !(info.flags & kAudioUnitParameterFlag_NonRealTime);
+    if (info.cfNameString &&
+        (info.flags & kAudioUnitParameterFlag_HasCFNameString) &&
+        (info.flags & kAudioUnitParameterFlag_CFNameRelease))
+      CFRelease(info.cfNameString);
+    return writable;
+  }
+  static Parameter describe(juce::AudioPluginInstance &p, int index) {
+    return describeById(p, parameterId(p, index));
   }
   static double plain(juce::AudioPluginInstance &, const Parameter &p,
                       double raw) {

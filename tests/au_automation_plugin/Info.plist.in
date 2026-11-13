@@ -100,6 +100,54 @@
 			<key>version</key>
 			<integer>65536</integer>
 		</dict>
+		<dict>
+			<key>description</key>
+			<string>Automation AU Delayed Instrument</string>
+			<key>factoryFunction</key>
+			<string>AutomationAUFactory</string>
+			<key>manufacturer</key>
+			<string>OMrl</string>
+			<key>name</key>
+			<string>OpenMIRLab: Automation AU Delayed Instrument</string>
+			<key>subtype</key>
+			<string>AuP6</string>
+			<key>type</key>
+			<string>aumu</string>
+			<key>version</key>
+			<integer>65536</integer>
+		</dict>
+		<dict>
+			<key>description</key>
+			<string>Automation AU Long Delayed Instrument</string>
+			<key>factoryFunction</key>
+			<string>AutomationAUFactory</string>
+			<key>manufacturer</key>
+			<string>OMrl</string>
+			<key>name</key>
+			<string>OpenMIRLab: Automation AU Long Delayed Instrument</string>
+			<key>subtype</key>
+			<string>AuP7</string>
+			<key>type</key>
+			<string>aumu</string>
+			<key>version</key>
+			<integer>65536</integer>
+		</dict>
+		<dict>
+			<key>description</key>
+			<string>Automation AU Huge Delayed Instrument</string>
+			<key>factoryFunction</key>
+			<string>AutomationAUFactory</string>
+			<key>manufacturer</key>
+			<string>OMrl</string>
+			<key>name</key>
+			<string>OpenMIRLab: Automation AU Huge Delayed Instrument</string>
+			<key>subtype</key>
+			<string>AuP8</string>
+			<key>type</key>
+			<string>aumu</string>
+			<key>version</key>
+			<integer>65536</integer>
+		</dict>
 	</array>
 	<key>CFBundleExecutable</key>
 	<string>AutomationAU</string>

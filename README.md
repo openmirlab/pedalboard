@@ -164,7 +164,9 @@ Use `automation={vst: {...}}` in a graph, including alongside builtin curves.
 MIDI instruments accept the same keyword on their existing render entry point:
 `vst(midi_messages, duration=seconds, sample_rate=rate, automation={...})`.
 Instrument curves have one value per returned frame, on the same input clock as
-MIDI. Instrument output-latency compensation is separate and unchanged.
+MIDI. For standalone offline instruments, opt into fixed reported-latency
+compensation with `compensate_latency=True` and `reset=True`; raw output remains
+the default. See [instrument latency](docs/source/instrument_latency.rst).
 
 Display-unit conversion validates and copies the entire curve against the current
 controller model before DSP changes. It checks that model again after preparation

@@ -22,19 +22,25 @@
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 namespace {
-const std::array<FUID, 6> ids = {
+const std::array<FUID, 9> ids = {
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A001),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A002),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A003),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A004),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A005),
-    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A006)};
+    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A006),
+    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A007),
+    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A008),
+    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A009)};
 const char *names[] = {"Automation Probe",
                        "Automation Probe Last Point",
                        "Automation Probe Delayed",
                        "Automation Probe Instrument",
                        "Automation Probe Infinite Gain",
-                       "Automation Probe Rate Dependent"};
+                       "Automation Probe Rate Dependent",
+                       "Automation Probe Delayed Instrument",
+                       "Automation Probe Long Delayed Instrument",
+                       "Automation Probe Huge Delayed Instrument"};
 static_assert(std::size(names) == std::size(ids));
 constexpr ParamID gainId = 0x1001, frequencyId = 0x314159, bypassId = 0xABC,
                   blocksId = 0x998, brokenId = 0x777, misparsedId = 0x999;
@@ -46,6 +52,11 @@ int parameterIndex(ParamID id) {
     if (parameterIds[i] == id)
       return i;
   return -1;
+}
+
+bool isInstrument(int kind) { return kind == 3 || (kind >= 6 && kind <= 8); }
+int latency(int kind) {
+  return kind == 2 || kind == 6 ? 20 : kind == 7 ? 4097 : kind == 8 ? 16385 : 0;
 }
 
 class Probe final : public IComponent,
@@ -87,8 +98,8 @@ public:
   int32 PLUGIN_API getBusCount(MediaType type,
                                BusDirection direction) override {
     if (type == kAudio)
-      return direction == kOutput || kind != 3 ? 1 : 0;
-    return kind == 3 ? 1 : 0;
+      return direction == kOutput || !isInstrument(kind) ? 1 : 0;
+    return isInstrument(kind) ? 1 : 0;
   }
   tresult PLUGIN_API getBusInfo(MediaType type, BusDirection direction,
                                 int32 index, BusInfo &info) override {
@@ -137,17 +148,18 @@ public:
                                         int32 numInputs,
                                         SpeakerArrangement *outputs,
                                         int32 numOutputs) override {
-    if (numOutputs != 1 || numInputs != (kind == 3 ? 0 : 1))
+    if (numOutputs != 1 || numInputs != (isInstrument(kind) ? 0 : 1))
       return kResultFalse;
     const auto count = SpeakerArr::getChannelCount(outputs[0]);
-    if (count < 1 || count > 2 || (kind != 3 && inputs[0] != outputs[0]))
+    if (count < 1 || count > 2 ||
+        (!isInstrument(kind) && inputs[0] != outputs[0]))
       return kResultFalse;
     channels = count;
     return kResultOk;
   }
   tresult PLUGIN_API getBusArrangement(BusDirection direction, int32 index,
                                        SpeakerArrangement &arr) override {
-    if (index != 0 || (kind == 3 && direction == kInput))
+    if (index != 0 || (isInstrument(kind) && direction == kInput))
       return kResultFalse;
     arr = channels == 1 ? SpeakerArr::kMono : SpeakerArr::kStereo;
     return kResultOk;
@@ -155,8 +167,9 @@ public:
   tresult PLUGIN_API canProcessSampleSize(int32 size) override {
     return size == kSample32 ? kResultTrue : kResultFalse;
   }
-  uint32 PLUGIN_API getLatencySamples() override { return kind == 2 ? 20 : 0; }
+  uint32 PLUGIN_API getLatencySamples() override { return latency(kind); }
   tresult PLUGIN_API setupProcessing(ProcessSetup &setup) override {
+    maxBlockSize = setup.maxSamplesPerBlock;
     if (kind == 5)
       frequencyMaximum = setup.sampleRate * .5;
     clear();
@@ -170,6 +183,8 @@ public:
   uint32 PLUGIN_API getTailSamples() override { return 0; }
 
   tresult PLUGIN_API process(ProcessData &data) override {
+    if (data.numSamples > maxBlockSize)
+      return kInvalidArgument;
     ++blocks;
     struct Cursor {
       IParamValueQueue *queue = nullptr;
@@ -239,22 +254,23 @@ public:
       const double frequency = normalizedParamToPlain(frequencyId, dsp[1]);
       for (int32 c = 0; data.numOutputs && c < data.outputs[0].numChannels;
            ++c) {
-        float input = kind == 3 ? (note ? 1.0f : 0.0f)
-                                : data.inputs[0].channelBuffers32[c][i];
+        float input = isInstrument(kind)
+                          ? (note ? 1.0f : 0.0f)
+                          : data.inputs[0].channelBuffers32[c][i];
         float output =
             dsp[2] >= .5 ? input : (float)(input * gain * frequency / 20000.0);
-        if (kind == 2) {
+        if (latency(kind)) {
           const float old = delay[c][position];
           delay[c][position] = output;
           output = old;
         }
         data.outputs[0].channelBuffers32[c][i] = output;
       }
-      position = (position + 1) % 20;
+      position = (position + 1) % std::max(20, latency(kind));
     }
     // Returned MIDI must never become input to a later host sub-block. An
     // accidental reuse of these note-offs would cut subsequent held notes.
-    if (kind == 3 && data.outputEvents && data.numSamples > 0) {
+    if (isInstrument(kind) && data.outputEvents && data.numSamples > 0) {
       Event event{};
       event.type = Event::kNoteOffEvent;
       event.noteOff.pitch = 60;
@@ -368,12 +384,12 @@ private:
     blocks = 0;
   }
   std::atomic<uint32> references{1};
-  int kind, channels = 2, position = 0;
+  int kind, channels = 2, position = 0, maxBlockSize = 8192;
   bool note = false;
   uint64 blocks = 0;
   double frequencyMaximum = 20000;
   std::array<double, 6> ui{60.0 / 72.0, 0, 0, 0, 0, 0}, dsp{ui};
-  std::array<std::array<float, 20>, 2> delay{};
+  std::array<std::array<float, 16385>, 2> delay{};
 };
 
 class Factory final : public IPluginFactory2 {
@@ -421,7 +437,8 @@ public:
     std::strncpy(info->category, kVstAudioEffectClass,
                  sizeof(info->category) - 1);
     std::strncpy(info->name, names[index], sizeof(info->name) - 1);
-    std::strncpy(info->subCategories, index == 3 ? "Instrument|Synth" : "Fx",
+    std::strncpy(info->subCategories,
+                 isInstrument(index) ? "Instrument|Synth" : "Fx",
                  sizeof(info->subCategories) - 1);
     std::strncpy(info->vendor, "OpenMIRLab", sizeof(info->vendor) - 1);
     std::strncpy(info->version, "1.0.0", sizeof(info->version) - 1);

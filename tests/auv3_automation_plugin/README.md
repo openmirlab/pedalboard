@@ -15,8 +15,9 @@ and component subtypes depend on the build directory. The helper refuses to repl
 preexisting entries and unregisters its own entries at teardown. It uses no GUI,
 network, App Store account or private signing key.
 
-The extension principal class implements AUAudioUnitFactory. Three components share
-known DSP: a direct effect, a20-sample delayed effect and a note-gated instrument.
+The extension principal class implements AUAudioUnitFactory. Six components share
+known DSP: a direct effect, a20-sample delayed effect, a note-gated instrument and
+three instruments delayed by20/4097/16385 reported samples.
 Each test uses the public AudioUnitPlugin API in a subprocess with a30-second bound;
 this captures hangs/crashes during loading, processing or destruction. It is not a
 new timeout guarantee for all third-party plugins.
@@ -30,8 +31,25 @@ checking that the legacy AU bridge does not truncate controls into the wrong nod
 
 Analytical tests use the same physical float32 oracle as the AUv2 suite, with3e-7
 absolute/relative error bounds. Partition/reset/hold comparisons require exact
-output equality. Tests cover three component descriptions in one extension, relative/
+output equality. Tests cover six component descriptions in one extension, relative/
 absolute/trailing-slash/symlink/Unicode paths, dB/Hz/boolean curves, reported latency,
 MIDI offsets/holds, graph queues, owned/omitted lanes, state and reinstantiation.
 Native scheduled events, third-party AUv3 vendor compatibility and GUI behavior are
 outside this fixture's evidence.
+
+
+`uv run pytest tests/test_auv3_instrument_latency.py -q` exercises69 fresh-process
+compensation cases: both44.1/48kHz,mono/stereo,blocks1/31/8192, near-end notes,
+longer-than-clip latency, source-clock curves and a65536-frame caller block.
+It also checks repeated reset, empty duration, post-duration MIDI exclusion, raw
+streams, early rejection without consuming MIDI, and writable-only configuration
+roundtrips. Each delayed instrument must emit a render PID distinct from Python.
+Read-only Render Frames/Render Capacity parameters expose actual DSP calls and
+prepared capacity, so silent bypass cannot count as successful processing.
+
+AUv3 MIDI prepares at least8192 frames while processing the requested small spans.
+The regression covers the observed scalar tiny-capacity failure: without that
+floor, no DSP render occurs for tested1–16-frame capacities, although curves on
+an8192-frame prepared engine work. Native AU flags exclude read-only counters from
+configuration comparisons even when JUCE's generic automatable flag is permissive.
+This remains source-built host acceptance, not third-party vendor or GUI acceptance.

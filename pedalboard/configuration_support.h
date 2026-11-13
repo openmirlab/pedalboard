@@ -38,6 +38,13 @@ void bindConfigurationSupport(py::module &m, const char *name) {
             auto *parameter = instance.getHostedParameter(i);
             if (!parameter || !parameter->isAutomatable())
               continue;
+#if JUCE_MAC && JUCE_PLUGINHOST_AU
+            // JUCE's legacy AU flag is not sufficient for read-only AUv3
+            // meters. Capture only writable, real-time native parameters.
+            if constexpr (std::is_same_v<Format, juce::AudioUnitPluginFormat>)
+              if (!AudioUnitAutomationBackend::isAutomatable(instance, i))
+                continue;
+#endif
             const auto raw = parameter->getValue();
             const auto text = parameter->getText(raw, 512);
             const auto canonical = parameter->getValueForText(text);

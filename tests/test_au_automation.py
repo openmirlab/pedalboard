@@ -23,7 +23,9 @@ pytestmark = pytest.mark.skipif(platform.system() != "Darwin", reason="Audio Uni
 @pytest.fixture(scope="session")
 def au_probe(tmp_path_factory):
     source = Path(__file__).parent / "au_automation_plugin"
-    build = tmp_path_factory.mktemp("au-automation-build")
+    # Imported fixture aliases must share one process-local AU registration.
+    # CoreAudio rejects a second factory for the same component description.
+    build = tmp_path_factory.getbasetemp() / "au-automation-build"
     cmake = shutil.which("cmake")
     if not cmake:
         pytest.fail("AU automation tests require CMake and a C++17 compiler")
