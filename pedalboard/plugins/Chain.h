@@ -31,12 +31,13 @@ class Chain : public PluginContainer {
 public:
   Chain(std::vector<std::shared_ptr<Plugin>> plugins)
       : PluginContainer(plugins) {}
-  virtual ~Chain(){};
+  virtual ~Chain() {};
 
   virtual void prepare(const juce::dsp::ProcessSpec &spec) {
+    automationResetReady = false;
     for (auto plugin : plugins) {
       if (plugin) {
-        plugin->prepare(spec);
+        processingPlugin(plugin.get())->prepare(spec);
       }
     }
     lastSpec = spec;
@@ -59,9 +60,14 @@ public:
   }
 
   virtual void reset() {
+    // A render transaction preserves only its root's new session. Resetting
+    // a nested container must discard that container's earlier session.
+    if (nativeProcessingRoot != this)
+      automationState.reset();
+    automationResetReady = true;
     for (auto plugin : plugins) {
       if (plugin) {
-        plugin->reset();
+        processingPlugin(plugin.get())->reset();
       }
     }
   }
@@ -70,7 +76,7 @@ public:
     int hint = 0;
     for (auto plugin : plugins) {
       if (plugin) {
-        hint += plugin->getLatencyHint();
+        hint += processingPlugin(plugin.get())->getLatencyHint();
       }
     }
     return hint;

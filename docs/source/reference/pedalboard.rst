@@ -85,8 +85,9 @@ For successive audio chunks, pass matching curve slices and ``reset=False``.
 The usual audio-layout detection rules still apply: establish the channel layout
 with an unambiguous block before tiny or square multichannel fragments.
 Omit ``automation`` (or pass ``None`` or an empty dict) to use the existing
-scalar processing path. Whole ``Pedalboard``/``Chain``/``Mix`` curve routing and external-plugin
-automation are not supported. Additional dynamics controls are listed below.
+scalar processing path. ``Pedalboard``/``Chain``/``Mix`` also accept effect-instance
+mappings, as described below. External-plugin parameter automation is not
+supported. Additional dynamics controls are listed below.
 
 Dynamics controls
 ~~~~~~~~~~~~~~~~~
@@ -530,3 +531,41 @@ Requested scalar holds on an active clock must also stay within the curve range.
 A scalar restart retains the upstream wider rate range and processing behavior.
 ``None``/``{}`` and fixed scalar processing retain that existing path when no
 clocked stream is active. No GSM controls or GSM automation are introduced.
+
+
+Effect-chain automation
+-----------------------
+
+``Pedalboard``, ``Chain`` and ``Mix`` accept
+``automation={effect_instance: {parameter_name: numpy_curve}}`` on ``process`` and
+``__call__``. Targets must be unique reachable supported builtin instances, not
+containers, indices, strings or foreign effects. Uncontrolled effects and ``None``
+branches retain scalar behavior. Containers and their public child identities are
+not replaced. Duplicate references and cycles are rejected before processing.
+
+All curves have one target per root input frame. Serial nodes consume targets
+with valid upstream audio, and parallel branches retain pending audio and targets
+across calls. This source-frame ownership does not remove a processor's documented
+smoothing or windowed response. ``reset=True`` resets and compensates startup
+latency, holding final targets during synthetic silence; it does not export full
+effect tails. Send explicit zero audio to render those tails.
+
+For streaming, explicitly call the root's ``reset()`` first, then process every
+slice with ``reset=False``. Curves and audio are sliced on the same root-input
+boundaries; returned audio may initially contain fewer frames. Omitted active
+lanes hold their last scheduled target, including when automation is ``None`` or
+an empty dict. Empty audio does not advance or flush a session. Curve arrays are
+validated and copied before rendering; pending copies survive caller mutation.
+All controlled effects receive joint preflight before setters, reset or DSP
+preparation, and invalid maps preserve pending queues and processing memory.
+
+Keep node/parameter lanes, topology, sample rate and channel count fixed within a
+session. Change these with ``reset=True`` or explicitly reset the root before a
+new stream. The first prepared native capacity is retained (at most 8192 frames);
+larger calls reuse it in sub-blocks, so buffer-size growth does not reset history.
+Configure scalar defaults before starting; active lanes use curves.
+Independently processing/resetting a participating child or nested container during
+a root session is unsupported and requires restarting the root. VST/AU event
+routing and arbitrary state cloning are separate capabilities, not part of this
+interface. Serialize calls that continue the same streaming session. Scalar calls
+on graphs without an active session retain the original processing path.

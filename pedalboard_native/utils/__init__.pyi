@@ -41,7 +41,26 @@ class Chain(pedalboard_native.PluginContainer, pedalboard_native.Plugin):
     def __init__(self, plugins: typing.List[pedalboard_native.Plugin]) -> None: ...
     @typing.overload
     def __repr__(self) -> str: ...
-    pass
+    def process(
+        self,
+        input_array: numpy.ndarray[typing.Any, typing.Any],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[pedalboard_native.Plugin, dict[str, numpy.ndarray[typing.Any, typing.Any]]] | None = None,
+    ) -> numpy.ndarray[typing.Any, numpy.dtype[numpy.float32]]:
+        """Process a graph with effect-instance keys and root-input-frame curves."""
+    def __call__(
+        self,
+        input_array: numpy.ndarray[typing.Any, typing.Any],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[pedalboard_native.Plugin, dict[str, numpy.ndarray[typing.Any, typing.Any]]] | None = None,
+    ) -> numpy.ndarray[typing.Any, numpy.dtype[numpy.float32]]:
+        """Alias for process, including graph automation."""
 
 class Mix(pedalboard_native.PluginContainer, pedalboard_native.Plugin):
     """
@@ -52,7 +71,26 @@ class Mix(pedalboard_native.PluginContainer, pedalboard_native.Plugin):
     def __init__(self, plugins: typing.List[pedalboard_native.Plugin]) -> None: ...
     @typing.overload
     def __repr__(self) -> str: ...
-    pass
+    def process(
+        self,
+        input_array: numpy.ndarray[typing.Any, typing.Any],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[pedalboard_native.Plugin, dict[str, numpy.ndarray[typing.Any, typing.Any]]] | None = None,
+    ) -> numpy.ndarray[typing.Any, numpy.dtype[numpy.float32]]:
+        """Process a graph with effect-instance keys and root-input-frame curves."""
+    def __call__(
+        self,
+        input_array: numpy.ndarray[typing.Any, typing.Any],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[pedalboard_native.Plugin, dict[str, numpy.ndarray[typing.Any, typing.Any]]] | None = None,
+    ) -> numpy.ndarray[typing.Any, numpy.dtype[numpy.float32]]:
+        """Alias for process, including graph automation."""
 
 def time_stretch(
     input_audio: numpy.ndarray[typing.Any, numpy.dtype[numpy.float32]],

@@ -58,8 +58,8 @@ public:
     if (!std::isfinite(rate) || rate < 1 || !std::isfinite((float)rate) ||
         controls.front().values.size() + 65536 >= INT_MAX)
       throw std::range_error("Unsafe Resample sample rate or frame count");
-    automationRequested = true;
   }
+  void requestAutomation() { automationRequested = true; }
   void validateAutomationStream(bool reset) const {
     if (!reset && scalarHasProcessed && !automationActive)
       throw std::range_error("Start Resample automation with reset=True after "
@@ -643,7 +643,8 @@ default from Pedalboard v0.9.15 onwards. (Previously, :py:class:`WindowedSinc` w
       DenseParameterLatency::Buffered,
       [](const auto &effect, bool reset) {
         effect.validateAutomationStream(reset);
-      });
+      },
+      [](auto &effect, const auto &) { effect.requestAutomation(); });
 }
 
 /**

@@ -39,6 +39,7 @@ namespace py = pybind11;
 #include "plugin_templates/PrimeWithSilence.h"
 #include "plugin_templates/Resample.h"
 
+#include "chain_automation.h"
 #include "plugins/AddLatency.h"
 #include "plugins/Bitcrush.h"
 #include "plugins/BrickwallLimiter.h"
@@ -239,6 +240,7 @@ If the number of samples and the number of channels are the same, each
   py::module utils = m.def_submodule("utils");
   init_mix(utils);
   init_chain(utils);
+  init_chain_automation(utils);
   init_time_stretch(utils);
 
   // Internal plugins for testing, debugging, etc:

@@ -23,6 +23,7 @@
 #include "Plugin.h"
 
 namespace Pedalboard {
+struct ChainAutomationState;
 
 /**
  * A class for all Pedalboard plugins that contain one or more other plugins.
@@ -54,7 +55,7 @@ public:
     plugins = _plugins;
   }
 
-  virtual ~PluginContainer(){};
+  virtual ~PluginContainer() {};
 
   std::vector<std::shared_ptr<Plugin>> &getPlugins() { return plugins; }
 
@@ -62,7 +63,7 @@ public:
    * Get a flat list of all of the plugins contained
    * by this plugin, not including itself.
    */
-  std::vector<std::shared_ptr<Plugin>> getAllPlugins() {
+  virtual std::vector<std::shared_ptr<Plugin>> getAllPlugins() {
     std::vector<std::shared_ptr<Plugin>> flatList;
     for (auto plugin : plugins) {
       if (!plugin) {
@@ -78,6 +79,11 @@ public:
     }
     return flatList;
   }
+
+public:
+  // Opaque native scheduling memory; never serialized or exposed as children.
+  std::shared_ptr<ChainAutomationState> automationState;
+  bool automationResetReady = true;
 
 protected:
   std::vector<std::shared_ptr<Plugin>> plugins;

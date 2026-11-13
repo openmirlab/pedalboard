@@ -80,6 +80,15 @@ public:
     if (!validDenseParameter(defaults.ceilingDb, defaults.ceilingDb,
                              DenseParameterDomain::LimiterCeiling, rate))
       throw std::range_error("Unsafe ceiling_db linear gain");
+  }
+  void requestAutomation(const std::vector<DenseParameterControl> &controls) {
+    Targets defaults = requestedTargets();
+    for (const auto &control : controls) {
+      if (control.name == "ceiling_db")
+        defaults.ceilingDb = control.values.front();
+      if (control.name == "release_ms")
+        defaults.releaseMs = control.values.front();
+    }
     automationDefaults_ = defaults;
   }
   void enableAutomationTimeline() {
@@ -498,7 +507,10 @@ inline void init_brickwall_limiter(py::module &m) {
          size_t cursor) {
         return effect.processAutomated(context, controls, cursor);
       },
-      DenseParameterLatency::Buffered);
+      DenseParameterLatency::Buffered, {},
+      [](auto &effect, const auto &controls) {
+        effect.requestAutomation(controls);
+      });
 }
 
 } // namespace Pedalboard

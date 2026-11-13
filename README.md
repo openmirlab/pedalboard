@@ -96,8 +96,42 @@ output = Resample()(audio, sample_rate, automation={"target_sample_rate": rate_c
 
 See the [automation reference](docs/source/reference/pedalboard.rst) for accepted
 values, layouts, reset behavior and effect-specific limits. This interface targets
-individual supported built-ins; `Pedalboard`/`Chain`/`Mix` routing and external-plugin
-automation retain their upstream interfaces.
+supported built-ins and their `Pedalboard`/`Chain`/`Mix` graphs. External-plugin
+parameter automation is not included.
+
+### Automate an effect chain
+
+Use effect instances as keys, so curves follow their effects when the graph is
+reordered. Nested `Chain` and `Mix` nodes use the same mapping:
+
+```python
+from pedalboard import Pedalboard, Gain, LowpassFilter
+
+gain, lowpass = Gain(), LowpassFilter()
+board = Pedalboard([gain, lowpass])
+output = board(audio, sample_rate, automation={
+    gain: {"gain_db": np.linspace(-12, 0, audio.size, dtype=np.float32)},
+    lowpass: {"cutoff_frequency_hz": np.geomspace(300, 8000, audio.size).astype(np.float32)},
+})
+```
+
+Every curve uses the root input's frame count. Downstream nodes wait for valid
+upstream audio; parallel branches retain their own pending audio and controls.
+For offline rendering, the default `reset=True` compensates startup latency and
+holds final targets while draining it. For streaming, call `board.reset()` first,
+then pass `reset=False` on every audio/curve slice. Omitted active lanes hold their
+last scheduled targets. Send explicit zero audio to drain delayed output; a zero-
+length call does not flush it. Existing reverb/delay tails still require enough
+explicit silence if you want to export the full tail.
+
+Within a streaming session, keep the same node/parameter lanes, topology, sample
+rate and channel count. To change them, restart with `reset=True`, or explicitly
+reset the root and start a new `reset=False` stream. Set scalar defaults before
+starting the session; use curves to change active lanes. Do not independently
+render/reset participating child nodes or nested containers during a root session.
+Unsupported effects can remain in the graph with scalar settings; only the 21
+listed built-ins can receive curves. Omit automation on a graph without an active
+session for its original scalar processing path.
 
 ## Install the OpenMIRLab source
 
