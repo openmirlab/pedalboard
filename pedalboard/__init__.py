@@ -48,3 +48,5 @@ from .version import __version__  # noqa: F401
 
 for _klass in _AVAILABLE_PLUGIN_CLASSES:
     vars()[_klass.__name__] = _klass
+
+from . import configuration as configuration

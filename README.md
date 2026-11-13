@@ -237,6 +237,25 @@ automation curve without reset. Direct GUI-to-host/audio roundtrip for CHOW AUv2
 other AUv3 vendors and other architectures is not covered; this is not universal
 plugin compatibility.
 
+## Save and restore configurations
+
+```python
+from pedalboard import configuration
+
+configuration.save(board, "chain.json", sample_rate=48000, num_channels=2)
+restored = configuration.load("chain.json")  # Validates settings and plugin state.
+report = configuration.verify(board, restored, audio, sample_rate=48000)
+```
+
+This saves supported builtin settings, Chain/Mix topology and opaque VST3/AU state.
+Saving leaves the source DSP history alone; `verify` explicitly resets and renders
+both objects to compare sound. Running tails and active notes are not guaranteed to
+survive configuration loading. Convolution is currently rejected because its IR
+cannot be captured through the existing binding. External plugin binaries/assets
+are not bundled; loading requires the same native runtime and unchanged plugins.
+See the [configuration contract](docs/source/configuration.rst) for format limits,
+main-thread requirements, parameter quantization and verification tolerances.
+
 ## Install the OpenMIRLab source
 
 The automation extensions are a development snapshot, not a separate PyPI release.

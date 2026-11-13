@@ -657,6 +657,8 @@ class ExternalPluginReloadType(enum.Enum):
     PersistsAudioOnReset = 2
 
 
+def _configuration_service_messages(seconds: float) -> None: ...
+
 class ExternalPlugin(Plugin):
     """
     A wrapper around a third-party effect plugin.
@@ -1544,6 +1546,9 @@ class PitchShift(Plugin):
     pass
 
 class AudioUnitPlugin(ExternalPlugin):
+    def _configuration_snapshot(self, include_state: bool = True) -> typing.Dict[str, typing.Any]: ...
+    def _configuration_restore(self, data: bytes, rate: float, channels: int) -> None: ...
+
     """
     A wrapper around third-party, audio effect or instrument
     plugins in `Apple's Audio Unit <https://en.wikipedia.org/wiki/Audio_Units>`_
@@ -2326,6 +2331,9 @@ class Reverb(Plugin):
     pass
 
 class VST3Plugin(ExternalPlugin):
+    def _configuration_snapshot(self, include_state: bool = True) -> typing.Dict[str, typing.Any]: ...
+    def _configuration_restore(self, data: bytes, rate: float, channels: int) -> None: ...
+
     """
     A wrapper around third-party, audio effect or instrument plugins in
     `Steinberg GmbH's VST3® <https://en.wikipedia.org/wiki/Virtual_Studio_Technology>`_
