@@ -27,7 +27,7 @@ namespace Pedalboard {
  */
 class RubberbandPlugin : public Plugin {
 public:
-  virtual ~RubberbandPlugin(){};
+  virtual ~RubberbandPlugin() {};
 
   virtual void prepare(const juce::dsp::ProcessSpec &spec) override {
     bool specChanged = lastSpec.sampleRate != spec.sampleRate ||
@@ -82,6 +82,14 @@ public:
   }
 
   RubberBandStretcher &getStretcher() { return *rbPtr; }
+
+  // Opt in for processors whose explicit reset must reproduce a fresh engine.
+  // Rubber Band's reset retains configuration selected by prior pitch changes.
+  void clearPreparation() {
+    rbPtr.reset();
+    lastSpec = {0};
+    initialSamplesRequired = 0;
+  }
 
   virtual int getLatencyHint() override {
     if (!rbPtr)

@@ -21,7 +21,7 @@ uv pip install -e '.[test]' ruff clang-format
 Run the focused automation checks:
 
 ```shell
-uv run --no-project pytest tests/test_parameter_automation.py tests/test_dynamics_automation.py tests/test_filter_automation.py tests/test_eq_automation.py tests/test_ladder_automation.py -q
+uv run --no-project pytest tests/test_*_automation.py tests/test_pitch_shift_streaming.py -q
 ```
 
 Run the related existing tests for filters, small buffers, locks, containers,

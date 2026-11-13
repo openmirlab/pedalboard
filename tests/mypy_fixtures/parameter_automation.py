@@ -4,9 +4,11 @@ import numpy as np
 
 from pedalboard import (
     Bitcrush,
+    BrickwallLimiter,
     Chorus,
     Clipping,
     Compressor,
+    Convolution,
     Delay,
     Distortion,
     Gain,
@@ -18,6 +20,9 @@ from pedalboard import (
     LowShelfFilter,
     NoiseGate,
     PeakFilter,
+    Phaser,
+    PitchShift,
+    Resample,
     Reverb,
 )
 
@@ -68,3 +73,26 @@ Chorus().process(
     automation={"rate_hz": np.ones(128), "depth": curve, "centre_delay_ms": np.full(128, 8)},
 )
 Chorus()(audio, 48000, reset=False, automation={"feedback": curve, "mix": curve})
+
+Phaser().process(
+    audio,
+    48000,
+    automation={"rate_hz": np.ones(128), "depth": curve, "centre_frequency_hz": np.full(128, 1300)},
+)
+Phaser()(audio, 48000, reset=False, automation={"feedback": curve, "mix": curve})
+
+Convolution(np.ones(16, dtype=np.float32), sample_rate=48000).process(
+    audio, 48000, automation={"mix": curve}
+)
+Convolution(np.ones(16, dtype=np.float32), sample_rate=48000)(
+    audio, 48000, reset=False, automation={"mix": curve}
+)
+
+BrickwallLimiter().process(audio, 48000, automation={"ceiling_db": curve})
+BrickwallLimiter()(audio, 48000, reset=False, automation={"release_ms": np.ones(128)})
+
+PitchShift().process(audio, 48000, automation={"semitones": curve})
+PitchShift()(audio, 48000, reset=False, automation={"semitones": curve})
+
+Resample().process(audio, 48000, automation={"target_sample_rate": np.full(128, 12000)})
+Resample()(audio, 48000, reset=False, automation={"target_sample_rate": np.full(128, 4000)})

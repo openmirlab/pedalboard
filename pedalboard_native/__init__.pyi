@@ -167,6 +167,28 @@ class BrickwallLimiter(Plugin):
     sidechain detection for inter-sample peaks (true_peak=True).
     """
 
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply dense native curves; one real NumPy value per input audio frame."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
+
     def __init__(
         self,
         ceiling_db: float = -1.0,
@@ -457,6 +479,28 @@ class Convolution(Plugin):
 
     *Support for passing NumPy arrays as impulse responses introduced in v0.9.10.*
     """
+
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply synchronized dense parameter targets, retaining DSP state on reset=False."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
 
     def __init__(
         self,
@@ -1386,6 +1430,28 @@ class Phaser(Plugin):
     A 6 stage phaser that modulates first order all-pass filters to create sweeping notches in the magnitude frequency response. This audio effect can be controlled with standard phaser parameters: the speed and depth of the LFO controlling the frequency response, a mix control, a feedback control, and the centre frequency of the modulation.
     """
 
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply synchronized dense parameter targets, retaining DSP state on reset=False."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
+
     def __init__(
         self,
         rate_hz: float = 1.0,
@@ -1442,6 +1508,28 @@ class PitchShift(Plugin):
 
     This effect uses `Chris Cannam's wonderful *Rubber Band* library <https://breakfastquay.com/rubberband/>`_ audio stretching library.
     """
+
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply dense native curves; one real NumPy value per input audio frame."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
 
     def __init__(self, semitones: float = 0.0) -> None: ...
     def __repr__(self) -> str: ...
@@ -2067,6 +2155,28 @@ class Resample(Plugin):
 
         This method can be more than 10x faster than Resampy's ``kaiser_fast`` method, and is useful for applications that are tolerant of some resampling artifacts.
         """
+
+    def process(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Apply dense native curves; one real NumPy value per input audio frame."""
+
+    def __call__(
+        self,
+        input_array: NDArray[float32] | NDArray[float64],
+        sample_rate: float,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]:
+        """Alias for process, including its optional automation keyword."""
 
     def __init__(
         self, target_sample_rate: float = 8000.0, quality: Quality = Quality.WindowedSinc32

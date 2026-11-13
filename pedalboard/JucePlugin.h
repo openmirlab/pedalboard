@@ -83,4 +83,34 @@ protected:
 private:
   DSPType dspBlock;
 };
+// For DSPs whose private scratch cannot grow without resetting their histories.
+// Prepare a fixed capacity on format changes; larger calls reuse bounded spans.
+template <typename DSPType, typename SampleType, unsigned int Capacity = 1024>
+class FixedBlockJucePlugin : public JucePlugin<DSPType> {
+  static_assert(Capacity > 0, "DSP scratch capacity must be positive.");
+
+public:
+  void prepare(const juce::dsp::ProcessSpec &spec) override {
+    if (this->lastSpec.sampleRate != spec.sampleRate ||
+        this->lastSpec.numChannels != spec.numChannels) {
+      auto boundedSpec = spec;
+      boundedSpec.maximumBlockSize = Capacity;
+      JucePlugin<DSPType>::prepare(boundedSpec);
+    }
+    this->lastSpec = spec;
+  }
+
+  int process(
+      const juce::dsp::ProcessContextReplacing<SampleType> &context) override {
+    auto block = context.getOutputBlock();
+    for (size_t start = 0; start < block.getNumSamples(); start += Capacity) {
+      auto span = block.getSubBlock(
+          start, std::min((size_t)Capacity, block.getNumSamples() - start));
+      juce::dsp::ProcessContextReplacing<SampleType> boundedContext(span);
+      boundedContext.isBypassed = context.isBypassed;
+      this->getDSP().process(boundedContext);
+    }
+    return (int)block.getNumSamples();
+  }
+};
 } // namespace Pedalboard

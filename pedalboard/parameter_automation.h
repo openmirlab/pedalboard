@@ -26,8 +26,12 @@ enum class DenseParameterDomain {
   UnitInterval,
   DelaySeconds,
   Finite,
-  ChorusRate,
+  ModulationRate,
   SignedUnitInterval,
+  LimiterCeiling,
+  PitchSemitones,
+  ResampleRate,
+  PhaserFrequency,
   Drive
 };
 
@@ -65,9 +69,21 @@ inline bool validDenseParameter(double original, float value,
   }
   case DenseParameterDomain::BitDepth:
     return original >= 0 && original <= 32;
+  case DenseParameterDomain::ResampleRate:
+    return original >= sampleRate / 64.0 && original <= sampleRate &&
+           value >= sampleRate / 64.0 && value <= sampleRate;
+  case DenseParameterDomain::PitchSemitones:
+    return original >= -72 && original <= 72;
+  case DenseParameterDomain::LimiterCeiling: {
+    const float gain = std::pow(10.0f, value / 20.0f);
+    return gain > 0 && std::isfinite(gain);
+  }
+  case DenseParameterDomain::PhaserFrequency:
+    return original > 0 && original < sampleRate * 0.5 && value > 0 &&
+           value < sampleRate * 0.5;
   case DenseParameterDomain::Finite:
     return true;
-  case DenseParameterDomain::ChorusRate:
+  case DenseParameterDomain::ModulationRate:
     return original >= 0 && original <= 100;
   case DenseParameterDomain::SignedUnitInterval:
     return original >= -1 && original <= 1;
@@ -108,16 +124,28 @@ struct DenseParameterControl {
 using DenseControlPreflight =
     std::function<void(const std::vector<DenseParameterControl> &)>;
 
+enum class DenseParameterLatency { Zero, Buffered };
+
+using DenseControlProcess =
+    std::function<int(const juce::dsp::ProcessContextReplacing<float> &,
+                      const std::vector<DenseParameterControl> &, size_t)>;
+
 // This private container makes the existing processing lock cover the child.
-// Only zero-latency effects are admitted by explicit bindings.
+// Buffered effects opt in explicitly and provide their own bulk frame
+// accounting.
 class DenseParameterProcessor : public PluginContainer {
 public:
-  DenseParameterProcessor(std::shared_ptr<Plugin> effect,
-                          std::vector<DenseParameterControl> controls,
-                          ChannelLayout layout, unsigned int channels,
-                          DenseControlPreflight preflight = {})
+  DenseParameterProcessor(
+      std::shared_ptr<Plugin> effect,
+      std::vector<DenseParameterControl> controls, ChannelLayout layout,
+      unsigned int channels, DenseControlPreflight preflight = {},
+      std::function<void()> prepared = {}, DenseControlProcess bulkProcess = {},
+      DenseParameterLatency latency = DenseParameterLatency::Zero,
+      bool allowTail = false)
       : PluginContainer({effect}), controls(std::move(controls)),
-        preflight(std::move(preflight)) {
+        preflight(std::move(preflight)), prepared(std::move(prepared)),
+        bulkProcess(std::move(bulkProcess)), latency(latency),
+        allowTail(allowTail) {
     lastChannelLayout = layout;
     lastSpec.numChannels = channels;
   }
@@ -126,6 +154,8 @@ public:
     validateOnce();
     applyControls(0);
     plugins.front()->prepare(spec);
+    if (prepared)
+      prepared();
     lastSpec = spec;
   }
 
@@ -137,14 +167,29 @@ public:
     plugins.front()->reset();
   }
 
+  int getLatencyHint() override {
+    return latency == DenseParameterLatency::Buffered
+               ? plugins.front()->getLatencyHint()
+               : 0;
+  }
+
   int process(
       const juce::dsp::ProcessContextReplacing<float> &context) override {
     auto block = context.getOutputBlock();
     const size_t count = block.getNumSamples();
-    if (cursor + count > controls.front().values.size())
+    if (cursor + count > controls.front().values.size() &&
+        !(latency == DenseParameterLatency::Buffered && allowTail))
       throw std::runtime_error(
           "Automation consumed more frames than supplied.");
 
+    if (bulkProcess) {
+      const int returned = bulkProcess(context, controls, cursor);
+      if (returned < 0 || returned > (int)count ||
+          (latency == DenseParameterLatency::Zero && returned != (int)count))
+        throw std::runtime_error("Invalid dense bulk output frame count.");
+      cursor += count;
+      return returned;
+    }
     size_t start = 0;
     while (start < count) {
       applyControls(cursor + start);
@@ -195,6 +240,10 @@ private:
   std::vector<DenseParameterControl> controls;
   size_t cursor = 0;
   DenseControlPreflight preflight;
+  std::function<void()> prepared;
+  DenseControlProcess bulkProcess;
+  DenseParameterLatency latency;
+  bool allowTail;
   bool validated = false;
 };
 
@@ -210,16 +259,31 @@ using DenseParameterPreflight =
                        const std::vector<DenseParameterControl> &, double,
                        unsigned int)>;
 
+template <typename Effect>
+using DenseParameterPrepared = std::function<void(Effect &)>;
+
+template <typename Effect>
+using DenseParameterProcess =
+    std::function<int(Effect &,
+                      const juce::dsp::ProcessContextReplacing<float> &,
+                      const std::vector<DenseParameterControl> &, size_t)>;
+
 // The specification order defines simultaneous updates, independently of the
 // Python dict's insertion order. All controls validate before DSP mutation.
 template <typename Effect, typename... Options>
-void bindDenseParameters(py::class_<Effect, Options...> &binding,
-                         std::vector<DenseParameterSpec<Effect>> specs,
-                         DenseParameterPreflight<Effect> preflight = {}) {
-  auto callback = [specs, preflight](std::shared_ptr<Effect> self,
-                                     py::array input, double sampleRate,
-                                     unsigned int bufferSize, bool reset,
-                                     py::object automation) {
+void bindDenseParameters(
+    py::class_<Effect, Options...> &binding,
+    std::vector<DenseParameterSpec<Effect>> specs,
+    DenseParameterPreflight<Effect> preflight = {},
+    DenseParameterPrepared<Effect> prepared = {},
+    DenseParameterProcess<Effect> bulkProcess = {},
+    DenseParameterLatency latency = DenseParameterLatency::Zero,
+    std::function<void(const Effect &, bool)> streamPreflight = {}) {
+  auto callback = [specs, preflight, prepared, bulkProcess, latency,
+                   streamPreflight](std::shared_ptr<Effect> self,
+                                    py::array input, double sampleRate,
+                                    unsigned int bufferSize, bool reset,
+                                    py::object automation) {
     if (automation.is_none())
       return process(input, sampleRate, {self}, bufferSize, reset);
     if (!py::isinstance<py::dict>(automation))
@@ -305,12 +369,26 @@ void bindDenseParameters(py::class_<Effect, Options...> &binding,
     if (!frames || !channels)
       return process(audio, sampleRate, {}, bufferSize, false);
     DenseControlPreflight validation;
-    if (preflight)
-      validation = [self, sampleRate, channels, preflight](const auto &values) {
-        preflight(*self, values, sampleRate, (unsigned int)channels);
+    if (preflight || streamPreflight)
+      validation = [self, sampleRate, channels, preflight, streamPreflight,
+                    reset](const auto &values) {
+        if (streamPreflight)
+          streamPreflight(*self, reset);
+        if (preflight)
+          preflight(*self, values, sampleRate, (unsigned int)channels);
+      };
+    std::function<void()> afterPrepare;
+    if (prepared)
+      afterPrepare = [self, prepared] { prepared(*self); };
+    DenseControlProcess bulk;
+    if (bulkProcess)
+      bulk = [self, bulkProcess](const auto &context, const auto &values,
+                                 size_t cursor) {
+        return bulkProcess(*self, context, values, cursor);
       };
     auto adapter = std::make_shared<DenseParameterProcessor>(
-        self, std::move(controls), layout, channels, std::move(validation));
+        self, std::move(controls), layout, channels, std::move(validation),
+        std::move(afterPrepare), std::move(bulk), latency, reset);
     return process(audio, sampleRate, {adapter}, bufferSize, reset);
   };
   for (const char *method : {"process", "__call__"})

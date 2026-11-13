@@ -323,3 +323,210 @@ allocation/index sums must fit native ints. These are format/arithmetic limits,
 not a memory budget. Fixed settings should use the scalar path to avoid curve
 validation/scheduling overhead. Numerical parity does not guarantee that extreme
 feedback or modulation settings are musically appropriate.
+
+
+Phaser controls
+~~~~~~~~~~~~~~~
+
+``Phaser`` accepts synchronized ``rate_hz``, ``depth``, ``centre_frequency_hz``,
+``feedback`` and ``mix`` curves. Rates must be finite in [0, 100] Hz, depth/mix
+finite in [0, 1], feedback finite in [-1, 1]. Centre targets must remain finite,
+positive float32 and strictly below the current Nyquist frequency. The native
+modulated frequency retains its logarithmic mapping/clamp to
+[20, min(20000, 0.49 * sample_rate)] Hz. The getter retains the requested centre.
+All supplied same-frame targets apply before audio in constructor order, independent
+of dict order. Omitted scalars and format limits validate under the processing lock
+before reset, preparation or parameter changes. Scalar setter acceptance is unchanged.
+
+The six original all-pass stages and shared LFO are retained. The LFO and filter
+frequency update every four audio frames; frequency/depth smoothers advance on
+that clock. Feedback and linear dry/wet gains advance at audio rate. All retain
+JUCE's original 50 ms ramps. A centre target between frequency ticks can wait up
+to three frames; a short pulse that returns before the next tick can have no audible
+frequency effect. Native target delivery does not bypass this cadence or promise
+instantaneous audible response. No new smoothing or phase-widening mode is added.
+
+``reset=False`` and block-size growth preserve LFO phase, the four-frame update
+counter, filter memory, feedback output and smoother progress. Phaser and Chorus
+share fixed 1024-frame DSP scratch preparation and internally bounded processing.
+Rate/channel changes and ``reset=True`` retain the original reset/smoother behavior.
+The curve path requires a finite sample rate >= 400 Hz to bound the downsampled
+oscillator's phase wrapping; its float32 clock and 50 ms native int step counts
+must be representable. Fixed settings should use the scalar path to avoid curve
+validation/scheduling overhead.
+
+There is one explicit initialization correction in the dense path. Original JUCE
+normalizes centre frequency using the DSP rate at setter time, then changes rate
+in prepare without recomputing that mapping. On cold 22.05/32 kHz renders this can
+leave a constructor-rate mapping until centre is assigned again. The curve path
+reapplies the effective centre after preparation, including omitted scalar centre,
+so requested Hz and continuation do not depend on chunking. Original comparisons
+at these rates prepare the format and reapply centre explicitly before processing.
+No-automation calls (including None/empty automation) retain the legacy mapping;
+prepare the scalar effect at the new rate then reassign centre when needed. This
+correction makes cold dense and legacy scalar output intentionally differ at low
+rates; at 44.1/48/96 kHz the original normalization range is already the same.
+
+
+Convolution controls
+~~~~~~~~~~~~~~~~~~~~
+
+``Convolution`` accepts ``automation={"mix": curve}``, finite targets in [0, 1]
+at float32 precision. The constructor, IR filename/array properties, normalization
+and IR sample-rate conversion retain their interfaces. IR content is fixed: no
+impulse-response curve/replacement is introduced. The final mix target persists.
+
+Mix uses the original linear DryWetMixer with 50 ms gain ramps. The input is copied
+into that mixer, wet convolution runs over an available block, then the mix targets
+are applied to corresponding output-frame subspans. Mix does not affect the wet
+engine's input or history. This avoids recalculating partial FFTs at each target
+change; convolution still runs at mix zero so later wet output retains its tail.
+No new mixing rule, smoothing or backend is added.
+
+Preparation occurs on sample-rate/channel-count changes. The first prepared capacity
+is bounded to [128, 8192] frames; normal default8192 processing keeps its original
+partition, while tiny/large first blocks are bounded. Later larger calls are split
+at that capacity without rebuilding the engine or clearing the tail/mixer progress.
+``reset=False`` preserves histories; ``reset=True`` and format changes retain the
+original clearing/initialization behavior. To render a tail, supply zero input and
+matching curves with ``reset=False``; no output frames are appended automatically.
+
+The curve path supports mono/stereo and the existing zero-latency engine. Leading
+silence or phase delay in an IR is part of the IR, not added engine latency. Rates
+must be finite and >= 100 Hz, with representable native 50 ms ramps and projected
+resampled-IR size. These format/size checks run under the native lock before reset
+or target changes and are not a memory budget. Scalar setter acceptance stays unchanged.
+
+FFT rounding depends on partition and partial-call sizes. Fine scalar calls and
+bulk convolution followed by mix automation can therefore differ by small float32
+residuals even with the same control timeline. Validation includes long tails,
+independent original comparisons and direct FIR timing; do not interpret byte
+inequality alone as a changed algorithm. Fixed settings should use the scalar path
+to avoid dense curve copies/validation. Small caller audio chunks still require
+small zero-latency FFT processing; the curve path does not buffer extra audio to
+make those calls larger or add output latency.
+
+
+BrickwallLimiter controls
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``BrickwallLimiter`` accepts ``ceiling_db`` and ``release_ms`` curves. Ceiling
+values must produce a positive finite float32 linear gain; release values must
+be positive finite float32 values whose sample counts fit the native signed int.
+``lookahead_ms`` and ``true_peak`` remain scalar configuration.
+
+Unlike scalar setters, curve targets align with compensated output time: the
+complete ceiling/release configuration travels through a queue with the delayed
+audio. The original peak detector, gain envelope, hold and safety clip are retained.
+This does not add smoothing or a new true-peak guarantee. Scalar-only processing
+retains the original input-clock behavior; original scalar replay of curves must
+delay its parameter updates by the actual lookahead latency to match this path.
+
+Each curve still has one target per source input frame. With ``reset=False``,
+initial calls may return fewer frames or no frames; concatenate returned audio
+and supply zero input to drain outstanding latency. Pending targets survive
+subsequent scalar calls. Getters report the last consumed source targets, which
+may still be queued. ``reset=True`` automatically drains latency with silence
+and holds the last targets, returning the input frame count. Explicit reset,
+sample-rate/channel changes and structural configuration changes start a new
+history. Growing block sizes preserve the detector, delay and control queues by
+using bounded internal scratch. Scalar history is retained for a warm transition
+into automation. Curves omitted from a call hold their requested scalar values;
+all effective values are checked before DSP history changes.
+
+
+PitchShift controls
+~~~~~~~~~~~~~~~~~~~
+
+``PitchShift`` accepts ``automation={"semitones": curve}`` with finite targets in
+[-72,72] at float32 precision. Curves have one value per source input frame and
+are shared across channels. Pitch targets travel through the existing one-second
+priming delay alongside source audio, then are applied immediately before those
+frames enter Rubber Band. Its original real-time/high-quality backend, spectral
+windows and variable output availability are retained. Scheduling a target is not
+a promise of an instantaneous audible pitch transition at an exact output sample.
+The latency hint is an allocation hint, not a control-to-output mapping.
+
+``reset=False`` preserves pending audio, control targets and pitch-engine state;
+concatenate returned frames and feed zero input to drain outstanding audio. Scalar
+continuations hold the requested target while pending earlier targets drain.
+``reset=True`` drains automatically with held final targets and returns the input
+frame count. Getters retain the last consumed source target. Scalar-only pitch
+changes keep their original engine-clock semantics. The fork fixes repeated
+preparation clearing the priming delay, which previously discarded short stream
+inputs; a warm transition into curves retains recent scalar target history.
+
+Varying curves use canonical one-frame steps inside the native engine, including
+priming and drain, so outer call boundaries do not move target updates. Uniform
+constant controls and histories retain bulk processing; fixed scalar values remain
+the least expensive route. No per-frame Python callbacks are used.
+
+The first prepared capacity is bounded to[1,8192]; larger subsequent contexts reuse
+bounded subspans without rebuilding the engine. Valid output is packed according
+to the host's right-aligned frame-count contract. Explicit reset and format changes
+clear the timeline. Explicit reset also reconstructs the nested Rubber Band engine
+on next preparation: its upstream reset retains configuration selected by previous
+pitch changes and is insufficient to reproduce a fresh dynamic render. This adds
+setup cost to reset renders; warm streaming retains the existing engine.
+Fixed pitch should use the scalar API. ``time_stretch`` remains
+a separate interface with its own processing, parameter resolution and duration
+contract; this feature does not change it.
+
+
+Resample controls
+~~~~~~~~~~~~~~~~~
+
+``Resample`` accepts ``automation={"target_sample_rate": curve}`` in physical Hz,
+with one float32 target per source input frame, shared across channels. Targets
+must be finite and in [sample_rate/64, sample_rate], including after conversion
+to float32. The sample rate passed to ``process`` is the fixed host rate, not a
+curve. All eleven existing ``quality`` choices remain available as fixed scalar
+configuration, with their original interpolation/filter arithmetic. No smoothing,
+new interpolation backend or quality automation is added.
+
+The curve path integrates targets on the source timeline and timestamps the virtual
+sampling events. Downsampling and reconstruction use that shared clock; changing
+the rate does not discard fractional phase or pending audio. Timestamped native
+and target rings are bounded for the validated ratio range. Blocks can grow or
+shrink without re-preparing filters. The original fractional latency-rounding
+phase convention is retained at initialization. Very small float32 differences
+from the scalar resampling partition can remain; this is not a new sound-quality
+or ideal reconstruction guarantee. Existing aliasing/filter behavior depends on
+``quality``, and abrupt rate changes can still produce the intended audible effect.
+
+Clocked processing has a fixed startup deficit ``L = 65 * B + 2`` frames, where
+``B`` is the interpolation mode's base latency:
+
+.. list-table:: Base latency used by clocked resampling
+   :header-rows: 1
+
+   * - Quality
+     - B
+   * - ZeroOrderHold
+     - 0
+   * - Linear
+     - 1
+   * - CatmullRom, Lagrange
+     - 2
+   * - WindowedSinc
+     - 100
+   * - WindowedSinc8/16/32/64/128/256
+     - 16/32/64/128/256/512
+
+For default WindowedSinc32, L=4162 (about86.7ms at48kHz). ``reset=True`` feeds final
+silence, holds the last target and compensates this delay, returning exactly the
+input frame count. ``reset=False`` initially returns fewer or zero frames; slice
+input and curves together, concatenate outputs and supply L zero frames to drain
+outstanding audio. Scalar ``reset=False`` calls after curve activation hold the
+requested rate using the same clock and pending history. Getters report the last
+consumed source target, which may still precede delayed output.
+
+Entering automation after already processing scalar audio requires ``reset=True``:
+the original scalar path has a different latency/state timeline. This is rejected
+before parameters or DSP history change when ``reset=False``. Starting a fresh
+object with curves and ``reset=False`` is supported. Explicit reset, format changes
+and quality changes clear the timeline; quality is not a seamless switching event.
+Requested scalar holds on an active clock must also stay within the curve range.
+A scalar restart retains the upstream wider rate range and processing behavior.
+``None``/``{}`` and fixed scalar processing retain that existing path when no
+clocked stream is active. No GSM controls or GSM automation are introduced.

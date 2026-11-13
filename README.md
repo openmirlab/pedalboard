@@ -3,7 +3,9 @@
 This fork adds native, per-frame NumPy parameter automation to selected built-in
 Pedalboard effects. It is maintained by [OpenMIRLab](https://github.com/openmirlab)
 and builds on [Spotify's Pedalboard](https://github.com/spotify/pedalboard).
-The existing JUCE algorithms and scalar processing API are retained.
+The existing DSP algorithms and scalar processing API are retained.
+
+Native NumPy curves are available for the 21 selected built-in effects listed below.
 
 ## Automation in this fork
 
@@ -21,6 +23,11 @@ The existing JUCE algorithms and scalar processing API are retained.
 | `Reverb` | `room_size`, `damping`, `wet_level`, `dry_level`, `width` |
 | `Delay` | `delay_seconds`, `feedback`, `mix` |
 | `Chorus` | `rate_hz`, `depth`, `centre_delay_ms`, `feedback`, `mix` |
+| `Phaser` | `rate_hz`, `depth`, `centre_frequency_hz`, `feedback`, `mix` |
+| `Convolution` | `mix` (fixed impulse response) |
+| `BrickwallLimiter` | `ceiling_db`, `release_ms` (fixed lookahead and detector) |
+| `PitchShift` | `semitones` (source time at the Rubber Band input) |
+| `Resample` | `target_sample_rate` (source-time clock; fixed `quality`) |
 
 Pass an `automation` dict to an effect's `process` or `__call__`. Each curve is a
 one-dimensional real NumPy array with one target per input audio frame, shared
@@ -58,7 +65,34 @@ Delay retains the original integer read-head updates and linear mix, without
 new smoothing; fast delay-time changes can produce read-head artifacts.
 Chorus keeps its original LFO phase and native smoothing; bounded scratch
 processing preserves history when blocks grow.
+Phaser retains its original four-frame frequency-update clock and 50 ms ramps;
+the dense path also refreshes centre-frequency mapping after format preparation.
+Convolution computes the wet signal in blocks, then applies the mix curve through
+its original 50 ms dry/wet ramps. Block growth preserves its tail; differing FFT
+partitions can produce small float32 differences.
+BrickwallLimiter queues ceiling/release targets with its lookahead so they align
+with compensated output frames. Streaming calls can initially return fewer frames;
+explicit zero input drains pending audio, while `reset=True` drains automatically.
+Scalar-only calls retain their original input-clock behavior.
+PitchShift queues targets through its one-second priming delay, then applies them
+when corresponding source frames enter Rubber Band. Windowed pitch response is
+not an instantaneous sample-exact output transition. Short streaming calls retain
+the priming audio; block growth keeps the first prepared capacity and histories.
+Resample curves share a clock between downsampling and reconstruction, retaining
+all eleven interpolation choices. Curve rates are in `[sample_rate/64, sample_rate]`;
+the host rate stays fixed. The clocked path uses fixed compensated latency (4162
+frames for default WindowedSinc32); a warm scalar-to-curve transition requires
+`reset=True`. Once active, `reset=False` scalar calls hold the rate on that clock.
 Fixed parameters should use the existing scalar path.
+
+For example, with the mono audio and sample rate above:
+
+```python
+from pedalboard import Resample
+
+rate_curve = np.linspace(sample_rate / 2, sample_rate / 12, audio.size, dtype=np.float32)
+output = Resample()(audio, sample_rate, automation={"target_sample_rate": rate_curve})
+```
 
 See the [automation reference](docs/source/reference/pedalboard.rst) for accepted
 values, layouts, reset behavior and effect-specific limits. This interface targets
