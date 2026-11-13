@@ -728,8 +728,15 @@ is distinct from testing a vendor-distributed AUv3 binary.
 
 Morass AUv3 and CHOWTapeModel AUv2 native editors were visually checked for
 parameter-to-UI updates, automation with the editor open, close/reopen and reopening
-after automation preparation/reset. Direct GUI-control-to-host updates remain
-unverified: the available UI automation did not produce observable parameter
-changes in these plugin controls. Other third-party AUv3 vendors and non-arm64
+after automation preparation/reset. A human-operated Morass AUv3 check additionally
+verifies GUI control -> native host readback -> rendered audio: editing Input Gain
+to -12.0 dB produces normalized readback 0.25 and quieter output, followed by a
+-12 to -3 dB automation curve with no intervening reset. The GUI and native getter
+both show -3.0 dB afterward. Immediate output RMS is not an exact gain oracle
+because the plugin retains tails and envelope state.
+
+Physical UI automation could not reliably deliver input in this desktop session;
+the successful GUI action was performed by the human operator. Direct GUI-to-host/
+audio roundtrip for CHOW AUv2, other third-party AUv3 vendors and non-arm64
 architectures remain unverified. Plugin-specific main-thread requirements,
 internal smoothing and block behavior still apply.

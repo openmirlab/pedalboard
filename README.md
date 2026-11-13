@@ -231,8 +231,11 @@ curves, scalar-reference audio, streaming and parameter-state checks. Its publis
 macOS installer contains AUv2/VST3, so this does not verify a vendor-distributed
 AUv3 binary. Morass AUv3 and CHOWTapeModel AUv2 editors were visually checked for
 parameter-to-UI updates, automation while open and reopening after reset.
-Direct GUI-control-to-host updates remain unverified. Other AUv3 vendors and
-architectures are not covered; this is not universal plugin compatibility.
+A human-operated Morass AUv3 check also verifies that editing Input Gain in its GUI
+updates the native host readback and affects rendered audio, followed by another
+automation curve without reset. Direct GUI-to-host/audio roundtrip for CHOW AUv2,
+other AUv3 vendors and other architectures is not covered; this is not universal
+plugin compatibility.
 
 ## Install the OpenMIRLab source
 
