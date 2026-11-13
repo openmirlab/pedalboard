@@ -675,6 +675,8 @@ class ExternalPlugin(Plugin):
         num_channels: int = 2,
         buffer_size: int = 8192,
         reset: bool = True,
+        *,
+        compensate_latency: bool = False,
     ) -> NDArray[float32]: ...
 
     @typing.overload
@@ -877,6 +879,8 @@ class ExternalPlugin(Plugin):
         num_channels: int = 2,
         buffer_size: int = 8192,
         reset: bool = True,
+        *,
+        compensate_latency: bool = False,
     ) -> NDArray[float32]: ...
     pass
 
@@ -1604,6 +1608,7 @@ class AudioUnitPlugin(ExternalPlugin):
         reset: bool = True,
         *,
         automation: dict[str, NDArray[typing.Any]] | None = None,
+        compensate_latency: bool = False,
     ) -> NDArray[float32]: ...
     def __init__(
         self,
@@ -1814,6 +1819,7 @@ class AudioUnitPlugin(ExternalPlugin):
         reset: bool = True,
         *,
         automation: dict[str, NDArray[typing.Any]] | None = None,
+        compensate_latency: bool = False,
     ) -> NDArray[float32]: ...
     def show_editor(self, close_event: typing.Optional[threading.Event] = None) -> None:
         """
@@ -1961,7 +1967,7 @@ class AudioUnitPlugin(ExternalPlugin):
     @property
     def reported_latency_samples(self) -> int:
         """
-        The number of samples of latency (delay) that this plugin reports to introduce into the audio signal due to internal buffering and processing. Pedalboard automatically compensates for this latency during processing, so this property is present for informational purposes. Note that not all plugins correctly report the latency that they introduce, so this value may be inaccurate (especially if the plugin reports 0).
+        The number of samples of latency (delay) that this plugin reports to introduce into the audio signal due to internal buffering and processing. Audio-effect processing compensates reported latency. MIDI instruments require compensate_latency=True with reset=True; the default retains raw output timing. Note that not all plugins correctly report the latency that they introduce, so this value may be inaccurate (especially if the plugin reports 0).
 
         *Introduced in v0.9.12.*
 
@@ -2569,6 +2575,7 @@ class VST3Plugin(ExternalPlugin):
         reset: bool = True,
         *,
         automation: dict[str, NDArray[typing.Any]] | None = None,
+        compensate_latency: bool = False,
     ) -> NDArray[float32]: ...
     def show_editor(self, close_event: typing.Optional[threading.Event] = None) -> None:
         """
@@ -2736,7 +2743,7 @@ class VST3Plugin(ExternalPlugin):
     @property
     def reported_latency_samples(self) -> int:
         """
-        The number of samples of latency (delay) that this plugin reports to introduce into the audio signal due to internal buffering and processing. Pedalboard automatically compensates for this latency during processing, so this property is present for informational purposes. Note that not all plugins correctly report the latency that they introduce, so this value may be inaccurate (especially if the plugin reports 0).
+        The number of samples of latency (delay) that this plugin reports to introduce into the audio signal due to internal buffering and processing. Audio-effect processing compensates reported latency. MIDI instruments require compensate_latency=True with reset=True; the default retains raw output timing. Note that not all plugins correctly report the latency that they introduce, so this value may be inaccurate (especially if the plugin reports 0).
 
         *Introduced in v0.9.12.*
 
@@ -2782,6 +2789,7 @@ class VST3Plugin(ExternalPlugin):
         reset: bool = True,
         *,
         automation: dict[str, NDArray[typing.Any]] | None = None,
+        compensate_latency: bool = False,
     ) -> NDArray[float32]: ...
 
 class _AudioProcessorParameter:

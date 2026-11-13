@@ -636,10 +636,12 @@ values are snapped only within floating-point rounding error before integer-fram
 conversion. Genuine fractional-frame positions retain the existing truncation rule.
 
 Standalone VST3 reset and audio/MIDI rendering share the instance lock. This does
-not remove a third-party plugin's own main-thread requirements. Scalar paths remain
-unchanged except the corrected MIDI timestamp precision/locking and validation of
-unsafe MIDI sizes. Instrument latency compensation, AU events, transport and bus
-hosting are not implemented by this change.
+not remove a third-party plugin's own main-thread requirements. Scalar and automated
+calls validate native MIDI sizes and retain sample-aligned timestamp precision.
+Standalone MIDI clips can opt into fixed reported-latency
+compensation with ``compensate_latency=True`` and ``reset=True``; raw MIDI timing
+remains the default. See :doc:`../instrument_latency`. Native AU events, transport
+and bus hosting remain separate.
 
 
 Audio Unit display-unit curves
@@ -649,7 +651,9 @@ On macOS, ``AudioUnitPlugin.process`` and ``__call__`` accept the same physical-
 ``automation`` keyword on audio and MIDI entry points. Graphs use
 ``automation={au_instance: {parameter_name: curve}}``. NumPy ownership, source-frame
 clock, joint validation, streaming omissions, stable lanes and root reset rules
-match VST3 and builtin graphs. Instrument latency compensation is unchanged.
+match VST3 and builtin graphs. Standalone MIDI rendering also accepts the shared
+``compensate_latency=True`` option with ``reset=True``; see
+:doc:`../instrument_latency` for the offline and raw-streaming boundaries.
 
 AU uses ``automation_mode="sample_steps"`` only; other modes raise an error.
 Changes at a frame are sent together through native AU setters before that span is

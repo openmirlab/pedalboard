@@ -90,6 +90,66 @@
 					<key>version</key>
 					<integer>65536</integer>
 				</dict>
+				<dict>
+					<key>description</key>
+					<string>AUv3 Automation Delayed Instrument</string>
+					<key>manufacturer</key>
+					<string>OMrl</string>
+					<key>name</key>
+					<string>OpenMIRLab: AUv3 Automation Delayed Instrument</string>
+					<key>sandboxSafe</key>
+					<true/>
+					<key>subtype</key>
+					<string>@PROBE_PREFIX@3</string>
+					<key>tags</key>
+					<array>
+						<string>Synthesizer</string>
+					</array>
+					<key>type</key>
+					<string>aumu</string>
+					<key>version</key>
+					<integer>65536</integer>
+				</dict>
+				<dict>
+					<key>description</key>
+					<string>AUv3 Automation Long Delayed Instrument</string>
+					<key>manufacturer</key>
+					<string>OMrl</string>
+					<key>name</key>
+					<string>OpenMIRLab: AUv3 Automation Long Delayed Instrument</string>
+					<key>sandboxSafe</key>
+					<true/>
+					<key>subtype</key>
+					<string>@PROBE_PREFIX@4</string>
+					<key>tags</key>
+					<array>
+						<string>Synthesizer</string>
+					</array>
+					<key>type</key>
+					<string>aumu</string>
+					<key>version</key>
+					<integer>65536</integer>
+				</dict>
+				<dict>
+					<key>description</key>
+					<string>AUv3 Automation Huge Delayed Instrument</string>
+					<key>manufacturer</key>
+					<string>OMrl</string>
+					<key>name</key>
+					<string>OpenMIRLab: AUv3 Automation Huge Delayed Instrument</string>
+					<key>sandboxSafe</key>
+					<true/>
+					<key>subtype</key>
+					<string>@PROBE_PREFIX@5</string>
+					<key>tags</key>
+					<array>
+						<string>Synthesizer</string>
+					</array>
+					<key>type</key>
+					<string>aumu</string>
+					<key>version</key>
+					<integer>65536</integer>
+				</dict>
 			</array>
 		</dict>
 		<key>NSExtensionPointIdentifier</key>

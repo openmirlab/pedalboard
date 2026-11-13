@@ -390,17 +390,21 @@ inline void initHostedAutomation(py::module &module, const char *className) {
   auto midiCallback = [factory](std::shared_ptr<Effect> self, py::object midi,
                                 float duration, float rate,
                                 unsigned int channels, unsigned long bufferSize,
-                                bool reset, py::object automation) {
+                                bool reset, py::object automation,
+                                bool compensateLatency) {
+    if (compensateLatency && !reset)
+      throw py::value_error("Instrument latency compensation requires "
+                            "reset=True for an offline clip");
     if (automation.is_none())
       return self->renderMIDIMessages(midi, duration, rate, channels,
-                                      bufferSize, reset);
+                                      bufferSize, reset, compensateLatency);
     if (!py::isinstance<py::dict>(automation))
       throw py::type_error(
           "automation must be a dict of display-unit NumPy curves");
     auto mapping = automation.cast<py::dict>();
     if (mapping.empty())
       return self->renderMIDIMessages(midi, duration, rate, channels,
-                                      bufferSize, reset);
+                                      bufferSize, reset, compensateLatency);
     const double count = (double)(duration * rate);
     if (!std::isfinite(duration) || duration < 0 || !std::isfinite(rate) ||
         rate <= 0 || !std::isfinite(count) || count > INT_MAX || !channels ||
@@ -410,7 +414,8 @@ inline void initHostedAutomation(py::module &module, const char *className) {
     auto adapter = factory(self, mapping, (size_t)count, rate, channels,
                            ChannelLayout::NotInterleaved, reset);
     return self->renderMIDIMessagesAutomated(midi, duration, rate, channels,
-                                             bufferSize, reset, adapter);
+                                             bufferSize, reset, adapter,
+                                             compensateLatency);
   };
   for (const char *method : {"process", "__call__"})
     binding.def(
@@ -418,8 +423,13 @@ inline void initHostedAutomation(py::module &module, const char *className) {
         py::arg("sample_rate"), py::arg("num_channels") = 2,
         py::arg("buffer_size") = DEFAULT_BUFFER_SIZE, py::arg("reset") = true,
         py::kw_only(), py::arg("automation") = py::none(),
+        py::arg("compensate_latency") = false,
         "Render MIDI with synchronized display-unit parameter curves on the "
-        "instrument input clock.");
+        "instrument input clock. With compensate_latency=True, require "
+        "reset=True, "
+        "drain the fixed reported latency and align exactly the requested "
+        "duration. "
+        "Default False preserves raw streaming output.");
   bindDenseParameterFactory(binding, std::move(factory));
 }
 } // namespace Pedalboard

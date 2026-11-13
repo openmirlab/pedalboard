@@ -10,7 +10,7 @@ silently skip. Tests build a temporary `.component`, load its factory with
 CoreFoundation and register it with AudioComponentRegister for this process only.
 `register.py` also registers the repository's real CHOWTapeModel AU fixture.
 
-Six component descriptions share an original Audio Unit implementation:
+Nine component descriptions share an original Audio Unit implementation:
 
 - Automation AU: direct physical dB/Hz/boolean controls with nonconsecutive IDs.
 - Automation AU Delayed: twenty reported samples of delay.
@@ -21,6 +21,10 @@ Six component descriptions share an original Audio Unit implementation:
 
 - Automation AU Partial Display: only the minimum is named-inf; remaining values
   use metadata dB, with no string parser. This is permitted by Apple's AU contract.
+- Automation AU Delayed Instrument, Long Delayed Instrument and Huge Delayed
+  Instrument: note-gated sources before 20, 4097 and 16385 reported samples of
+  delay, used by `tests/test_instrument_latency.py`. They test offline alignment,
+  raw streaming, post-duration MIDI exclusion and held drain controls.
 
 Read-only Blocks counts native renders; Setup is marked non-real-time and Broken
 has an unsupported display parser. The audio oracle is

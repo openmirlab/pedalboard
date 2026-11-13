@@ -2,6 +2,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <Foundation/Foundation.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cmath>
@@ -15,12 +16,14 @@ constexpr AUParameterAddress pidAddress = 0x998;
 constexpr AUParameterAddress instanceAddress = 0x999;
 constexpr AUParameterAddress identityAddress = 0xFA;
 constexpr AUParameterAddress lowAddress = 2;
+constexpr AUParameterAddress framesAddress = 0x99A, capacityAddress = 0x99B;
 std::atomic<unsigned> nextInstance{1};
 struct DSP {
   std::atomic<float> gain{0}, frequency{20}, pass{0}, identity{0}, decoy{0};
+  std::atomic<unsigned> renderFrames{0}, renderCapacity{0};
   bool note = false;
   unsigned position = 0;
-  std::array<std::array<float, 20>, 2> delay{};
+  std::array<std::array<float, 16385>, 2> delay{};
   void clear() {
     note = false;
     position = 0;
@@ -37,7 +40,8 @@ struct DSP {
   AUParameterTree *_parameters;
   DSP _dsp;
   unsigned _instance;
-  BOOL _instrument, _delayed;
+  BOOL _instrument;
+  unsigned _latency;
 }
 - (instancetype)
     initWithComponentDescription:(AudioComponentDescription)description
@@ -49,7 +53,11 @@ struct DSP {
   if (!self)
     return nil;
   _instrument = description.componentType == kAudioUnitType_MusicDevice;
-  _delayed = (description.componentSubType & 255) == '1';
+  const auto variant = description.componentSubType & 255;
+  _latency = variant == '1' || variant == '3' ? 20
+             : variant == '4'                 ? 4097
+             : variant == '5'                 ? 16385
+                                              : 0;
   _instance = nextInstance.fetch_add(1);
   AVAudioFormat *format =
       [[AVAudioFormat alloc] initStandardFormatWithSampleRate:44100 channels:2];
@@ -100,6 +108,11 @@ struct DSP {
   AUParameter *decoy =
       make(@"low_address_decoy", @"Low Address Decoy", lowAddress, 0, 1,
            kAudioUnitParameterUnit_Boolean, YES);
+  AUParameter *frames = make(@"render_frames", @"Render Frames", framesAddress,
+                             0, 1e9, kAudioUnitParameterUnit_Generic, NO);
+  AUParameter *capacity =
+      make(@"render_capacity", @"Render Capacity", capacityAddress, 0, 1e9,
+           kAudioUnitParameterUnit_Generic, NO);
   identity.value = decoy.value = 0;
   gain.value = 0;
   frequency.value = 20;
@@ -107,7 +120,7 @@ struct DSP {
   pid.value = getpid();
   instance.value = _instance;
   _parameters = [AUParameterTree createTreeWithChildren:@[
-    gain, frequency, pass, pid, instance, identity, decoy
+    gain, frequency, pass, pid, instance, identity, decoy, frames, capacity
   ]];
   DSP *dsp = &_dsp;
   const float creatorPID = getpid(), instanceID = _instance;
@@ -149,6 +162,10 @@ struct DSP {
       return creatorPID;
     case instanceAddress:
       return instanceID;
+    case framesAddress:
+      return dsp->renderFrames.load();
+    case capacityAddress:
+      return dsp->renderCapacity.load();
     default:
       return 0;
     }
@@ -177,7 +194,7 @@ struct DSP {
   return YES;
 }
 - (NSTimeInterval)latency {
-  return _delayed ? 20.0 / _outputs[0].format.sampleRate : 0;
+  return (double)_latency / _outputs[0].format.sampleRate;
 }
 - (BOOL)allocateRenderResourcesAndReturnError:(NSError **)error {
   if (![super allocateRenderResourcesAndReturnError:error])
@@ -208,11 +225,17 @@ struct DSP {
 }
 - (AUInternalRenderBlock)internalRenderBlock {
   DSP *dsp = &_dsp;
-  const BOOL instrument = _instrument, delayed = _delayed;
+  const BOOL instrument = _instrument;
+  const unsigned latency = _latency;
+  const AUAudioFrameCount capacity = self.maximumFramesToRender;
   return ^AUAudioUnitStatus(
       AudioUnitRenderActionFlags *flags, const AudioTimeStamp *timestamp,
       AUAudioFrameCount frames, NSInteger bus, AudioBufferList *output,
       const AURenderEvent *events, AURenderPullInputBlock pull) {
+    dsp->renderFrames.store(frames);
+    dsp->renderCapacity.store(capacity);
+    if (frames > capacity)
+      return (AUAudioUnitStatus)kAudioUnitErr_TooManyFramesToProcess;
     if (!instrument) {
       if (!pull)
         return (AUAudioUnitStatus)kAudioUnitErr_NoConnection;
@@ -265,14 +288,14 @@ struct DSP {
         float result = dsp->pass.load() >= .5
                            ? input
                            : (float)(input * gain * frequency / 20000.0);
-        if (delayed) {
+        if (latency) {
           const float previous = dsp->delay[c][dsp->position];
           dsp->delay[c][dsp->position] = result;
           result = previous;
         }
         samples[i] = dsp->identity.load() >= .5 ? (float)getpid() : result;
       }
-      dsp->position = (dsp->position + 1) % 20;
+      dsp->position = (dsp->position + 1) % std::max(20u, latency);
     }
     return (AUAudioUnitStatus)noErr;
   };

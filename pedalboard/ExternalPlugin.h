@@ -884,7 +884,7 @@ public:
 
     // If, post-reload, we still can't use the right number of channels, let's
     // conclude the plugin doesn't allow this channel count.
-    if ((!mainInputBus || mainInputBus->getNumberOfChannels() != numChannels) ||
+    if ((mainInputBus && mainInputBus->getNumberOfChannels() != numChannels) ||
         mainOutputBus->getNumberOfChannels() != numChannels) {
 
       // Reset the bus configuration to what it was before, so we don't
@@ -1467,14 +1467,20 @@ public:
   py::array_t<float> renderMIDIMessages(py::object midiMessages, float duration,
                                         float sampleRate,
                                         unsigned int numChannels,
-                                        unsigned long bufferSize, bool reset) {
+                                        unsigned long bufferSize, bool reset,
+                                        bool compensateLatency = false) {
     return renderMIDIMessagesAutomated(midiMessages, duration, sampleRate,
-                                       numChannels, bufferSize, reset, {});
+                                       numChannels, bufferSize, reset, {},
+                                       compensateLatency);
   }
   py::array_t<float> renderMIDIMessagesAutomated(
       py::object midiMessages, float duration, float sampleRate,
       unsigned int numChannels, unsigned long bufferSize, bool reset,
-      std::shared_ptr<DenseParameterProcessor> automation) {
+      std::shared_ptr<DenseParameterProcessor> automation,
+      bool compensateLatency = false) {
+    if (compensateLatency && !reset)
+      throw std::invalid_argument("Instrument latency compensation requires "
+                                  "reset=True for an offline clip");
     if (!std::isfinite(duration) || duration < 0 ||
         !std::isfinite(sampleRate) || sampleRate <= 0 || bufferSize == 0 ||
         bufferSize > INT_MAX || !numChannels || numChannels > INT_MAX ||
@@ -1508,7 +1514,7 @@ public:
 
     float *outputArrayPointer = static_cast<float *>(outputArray.request().ptr);
 
-    if (automation && outputSampleCount == 0)
+    if ((automation || compensateLatency) && outputSampleCount == 0)
       return outputArray;
     py::gil_scoped_release release;
     std::scoped_lock lock(this->mutex);
@@ -1535,6 +1541,17 @@ public:
       spec.sampleRate = sampleRate;
       spec.maximumBlockSize = (juce::uint32)bufferSize;
       spec.numChannels = (juce::uint32)numChannels;
+#if JUCE_MAC && JUCE_PLUGINHOST_AU
+      if constexpr (std::is_same_v<ExternalPluginType,
+                                   juce::AudioUnitPluginFormat>) {
+        // AUv3's legacy bridge can return silence for tiny prepared
+        // capacities. Keep a stable capacity,
+        // as automation already does, while still rendering requested spans.
+        if (AudioUnitAutomationBackend::isV3Instance(*pluginInstance))
+          spec.maximumBlockSize = std::max(spec.maximumBlockSize,
+                                           (juce::uint32)DEFAULT_BUFFER_SIZE);
+      }
+#endif
       if (automation)
         automation->prepare(spec);
       else
@@ -1561,6 +1578,27 @@ public:
       std::memset((void *)outputArrayPointer, 0,
                   sizeof(float) * numChannels * outputSampleCount);
 
+      // Offline alignment drains L extra frames but stores only the requested
+      // N. Capture latency after reset/prepare: preparation can change the
+      // report.
+      const int reportedLatency = pluginInstance->getLatencySamples();
+      if (compensateLatency &&
+          (reportedLatency < 0 ||
+           (unsigned long)reportedLatency > INT_MAX - outputSampleCount))
+        throw std::invalid_argument("Unsafe reported instrument latency");
+      const unsigned long latency = compensateLatency ? reportedLatency : 0;
+      const unsigned long renderSampleCount = outputSampleCount + latency;
+      const unsigned long capacity = std::min(bufferSize, renderSampleCount);
+      std::vector<std::vector<float>> scratch;
+      if (latency)
+        scratch.assign(numChannels, std::vector<float>(capacity));
+      auto checkLatency = [&] {
+        if (compensateLatency &&
+            pluginInstance->getLatencySamples() != reportedLatency)
+          throw std::runtime_error(
+              "Instrument latency changed during compensated render; "
+              "fixed reported latency is required");
+      };
       std::vector<float *> channelPointers(numChannels),
           partPointers(numChannels);
       std::vector<juce::PatchedVST3AutomationCurve> curves;
@@ -1570,14 +1608,27 @@ public:
         for (const auto &control : *controls)
           curves.push_back({*control.externalId, nullptr});
       }
+      std::vector<std::vector<float>> heldControls;
+      if (latency && controls) {
+        for (const auto &control : *controls)
+          heldControls.emplace_back(capacity, control.values.back());
+      }
       juce::MidiBuffer midiChunk, midiPart;
-      for (unsigned long i = 0; i < outputSampleCount; i += bufferSize) {
+      for (unsigned long i = 0; i < renderSampleCount;) {
         unsigned long chunkSampleCount =
-            std::min((unsigned long)bufferSize, outputSampleCount - i);
-
+            std::min(bufferSize, renderSampleCount - i);
+        // Keep drain spans separate from source spans, so control pointers
+        // never extend beyond the user's N values and post-duration MIDI is
+        // ignored.
+        if (i < outputSampleCount)
+          chunkSampleCount = std::min(chunkSampleCount, outputSampleCount - i);
+        const bool draining = i >= outputSampleCount;
         for (size_t c = 0; c < numChannels; c++) {
           channelPointers[c] =
-              (outputArrayPointer + (outputSampleCount * c) + i);
+              latency ? scratch[c].data()
+                      : outputArrayPointer + outputSampleCount * c + i;
+          if (latency)
+            std::fill_n(channelPointers[c], chunkSampleCount, 0.0f);
         }
 
         // Create an audio buffer that doesn't actually allocate anything, but
@@ -1586,12 +1637,16 @@ public:
             channelPointers.data(), channelPointers.size(), chunkSampleCount);
 
         midiChunk.clear();
-        midiChunk.addEvents(midiInputBuffer, i, chunkSampleCount, -i);
+        if (!draining)
+          midiChunk.addEvents(midiInputBuffer, i, chunkSampleCount, -(int)i);
 
         if (automation || automationActive) {
           for (size_t start = 0; start < chunkSampleCount;) {
             const size_t end =
-                scheduledSpanEnd(start, chunkSampleCount, controls, i);
+                draining
+                    ? std::min(start + (size_t)DEFAULT_BUFFER_SIZE,
+                               (size_t)chunkSampleCount)
+                    : scheduledSpanEnd(start, chunkSampleCount, controls, i);
             for (size_t c = 0; c < numChannels; ++c)
               partPointers[c] = audioChunk.getWritePointer((int)c, (int)start);
             juce::AudioBuffer<float> part(partPointers.data(), (int)numChannels,
@@ -1602,14 +1657,29 @@ public:
             if (controls) {
               for (size_t lane = 0; lane < controls->size(); ++lane)
                 curves[lane].values =
-                    (*controls)[lane].values.data() + i + start;
+                    draining ? heldControls[lane].data() + start
+                             : (*controls)[lane].values.data() + i + start;
               processHostedAutomation(part, midiPart, curves);
             } else
               pluginInstance->processBlock(part, midiPart);
+            checkLatency();
             start = end;
           }
-        } else
+        } else {
           pluginInstance->processBlock(audioChunk, midiChunk);
+          checkLatency();
+        }
+        if (latency) {
+          const unsigned long first = std::max(i, latency);
+          const unsigned long end = i + chunkSampleCount;
+          if (end > first)
+            for (size_t c = 0; c < numChannels; ++c)
+              std::memcpy(outputArrayPointer + outputSampleCount * c + first -
+                              latency,
+                          channelPointers[c] + first - i,
+                          (end - first) * sizeof(float));
+        }
+        i += chunkSampleCount;
       }
     }
 
@@ -2103,9 +2173,10 @@ example: a Windows VST3 plugin bundle will not load on Linux or macOS.)
           },
           "The number of samples of latency (delay) that this plugin reports "
           "to introduce into the audio signal due to internal buffering "
-          "and processing. Pedalboard automatically compensates for this "
-          "latency during processing, so this property is present for "
-          "informational purposes. Note that not all plugins correctly report "
+          "and processing. Audio-effect processing compensates reported "
+          "latency. MIDI instruments require compensate_latency=True with "
+          "reset=True; default MIDI output retains raw timing. "
+          "Note that not all plugins correctly report "
           "the latency that they introduce, so this value may be inaccurate "
           "(especially if the plugin reports 0).\n\n*Introduced in v0.9.12.*")
       .def_property_readonly(
@@ -2143,7 +2214,8 @@ example: a Windows VST3 plugin bundle will not load on Linux or macOS.)
            py::arg("duration"), py::arg("sample_rate"),
            py::arg("num_channels") = 2,
            py::arg("buffer_size") = DEFAULT_BUFFER_SIZE,
-           py::arg("reset") = true)
+           py::arg("reset") = true, py::kw_only(),
+           py::arg("compensate_latency") = false)
       .def("__call__",
            &ExternalPlugin<juce::PatchedVST3PluginFormat>::renderMIDIMessages,
            "Run an audio or MIDI buffer through this plugin, returning "
@@ -2151,7 +2223,8 @@ example: a Windows VST3 plugin bundle will not load on Linux or macOS.)
            py::arg("midi_messages"), py::arg("duration"),
            py::arg("sample_rate"), py::arg("num_channels") = 2,
            py::arg("buffer_size") = DEFAULT_BUFFER_SIZE,
-           py::arg("reset") = true)
+           py::arg("reset") = true, py::kw_only(),
+           py::arg("compensate_latency") = false)
       .def_readwrite(
           "_reload_type",
           &ExternalPlugin<juce::PatchedVST3PluginFormat>::reloadType,
@@ -2329,9 +2402,10 @@ see :class:`pedalboard.VST3Plugin`.)
           },
           "The number of samples of latency (delay) that this plugin reports "
           "to introduce into the audio signal due to internal buffering "
-          "and processing. Pedalboard automatically compensates for this "
-          "latency during processing, so this property is present for "
-          "informational purposes. Note that not all plugins correctly report "
+          "and processing. Audio-effect processing compensates reported "
+          "latency. MIDI instruments require compensate_latency=True with "
+          "reset=True; default MIDI output retains raw timing. "
+          "Note that not all plugins correctly report "
           "the latency that they introduce, so this value may be inaccurate "
           "(especially if the plugin reports 0).\n\n*Introduced in v0.9.12.*")
       .def_property_readonly(
@@ -2369,7 +2443,8 @@ see :class:`pedalboard.VST3Plugin`.)
            py::arg("duration"), py::arg("sample_rate"),
            py::arg("num_channels") = 2,
            py::arg("buffer_size") = DEFAULT_BUFFER_SIZE,
-           py::arg("reset") = true)
+           py::arg("reset") = true, py::kw_only(),
+           py::arg("compensate_latency") = false)
       .def("__call__",
            &ExternalPlugin<juce::AudioUnitPluginFormat>::renderMIDIMessages,
            "Run an audio or MIDI buffer through this plugin, returning "
@@ -2377,7 +2452,8 @@ see :class:`pedalboard.VST3Plugin`.)
            py::arg("midi_messages"), py::arg("duration"),
            py::arg("sample_rate"), py::arg("num_channels") = 2,
            py::arg("buffer_size") = DEFAULT_BUFFER_SIZE,
-           py::arg("reset") = true)
+           py::arg("reset") = true, py::kw_only(),
+           py::arg("compensate_latency") = false)
       .def_readwrite(
           "_reload_type",
           &ExternalPlugin<juce::AudioUnitPluginFormat>::reloadType,
