@@ -22,3 +22,15 @@ elseif(WIN32)
 else()
   set_target_properties(AutomationProbe PROPERTIES SUFFIX ".so" LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/AutomationProbe.vst3/Contents/${CMAKE_SYSTEM_PROCESSOR}-linux")
 endif()
+
+add_executable(NativeBusHost native_bus_host.cpp
+  "${SDK}/pluginterfaces/base/funknown.cpp"
+  "${SDK}/pluginterfaces/base/coreiids.cpp"
+  "${SDK}/public.sdk/source/vst/vstinitiids.cpp")
+target_include_directories(NativeBusHost PRIVATE "${SDK}")
+target_link_libraries(NativeBusHost PRIVATE ${CMAKE_DL_LIBS})
+if(APPLE)
+  target_link_libraries(NativeBusHost PRIVATE "-framework CoreFoundation")
+elseif(WIN32)
+  target_link_libraries(NativeBusHost PRIVATE ole32)
+endif()

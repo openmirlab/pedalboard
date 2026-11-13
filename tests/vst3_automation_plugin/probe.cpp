@@ -22,7 +22,7 @@
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 namespace {
-const std::array<FUID, 9> ids = {
+const std::array<FUID, 10> ids = {
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A001),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A002),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A003),
@@ -31,7 +31,8 @@ const std::array<FUID, 9> ids = {
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A006),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A007),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A008),
-    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A009)};
+    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A009),
+    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A00A)};
 const char *names[] = {"Automation Probe",
                        "Automation Probe Last Point",
                        "Automation Probe Delayed",
@@ -40,7 +41,8 @@ const char *names[] = {"Automation Probe",
                        "Automation Probe Rate Dependent",
                        "Automation Probe Delayed Instrument",
                        "Automation Probe Long Delayed Instrument",
-                       "Automation Probe Huge Delayed Instrument"};
+                       "Automation Probe Huge Delayed Instrument",
+                       "Automation Probe Buses"};
 static_assert(std::size(names) == std::size(ids));
 constexpr ParamID gainId = 0x1001, frequencyId = 0x314159, bypassId = 0xABC,
                   blocksId = 0x998, brokenId = 0x777, misparsedId = 0x999;
@@ -97,28 +99,38 @@ public:
   tresult PLUGIN_API setIoMode(IoMode) override { return kResultOk; }
   int32 PLUGIN_API getBusCount(MediaType type,
                                BusDirection direction) override {
+    if (kind == 9)
+      return type == kAudio ? 2 : 1;
     if (type == kAudio)
       return direction == kOutput || !isInstrument(kind) ? 1 : 0;
     return isInstrument(kind) ? 1 : 0;
   }
   tresult PLUGIN_API getBusInfo(MediaType type, BusDirection direction,
                                 int32 index, BusInfo &info) override {
-    if (index != 0 || getBusCount(type, direction) == 0)
+    if (index < 0 || index >= getBusCount(type, direction))
       return kInvalidArgument;
     info = {};
     info.mediaType = type;
     info.direction = direction;
-    info.channelCount = type == kAudio ? channels : 16;
-    info.busType = kMain;
+    info.channelCount =
+        type == kAudio ? (kind == 9 ? busChannels[direction][index] : channels)
+                       : 16;
+    info.busType = index ? kAux : kMain;
     info.flags = BusInfo::kDefaultActive;
-    text(info.name, type == kAudio ? "Audio" : "Notes");
+    text(info.name,
+         type == kAudio
+             ? (index ? (direction == kInput ? "External Key" : "Aux Output")
+                      : "Audio")
+             : "Notes");
     return kResultOk;
   }
   tresult PLUGIN_API getRoutingInfo(RoutingInfo &, RoutingInfo &) override {
     return kNotImplemented;
   }
-  tresult PLUGIN_API activateBus(MediaType, BusDirection, int32,
-                                 TBool) override {
+  tresult PLUGIN_API activateBus(MediaType type, BusDirection, int32 index,
+                                 TBool enabled) override {
+    if (kind == 9 && type == kAudio && index == 0 && !enabled)
+      return kResultFalse;
     return kResultOk;
   }
   tresult PLUGIN_API setActive(TBool active) override {
@@ -148,6 +160,22 @@ public:
                                         int32 numInputs,
                                         SpeakerArrangement *outputs,
                                         int32 numOutputs) override {
+    if (kind == 9) {
+      if (numInputs != 2 || numOutputs != 2 || inputs[0] != outputs[0])
+        return kResultFalse;
+      for (int direction = 0; direction < 2; ++direction)
+        for (int index = 0; index < 2; ++index) {
+          const auto arrangement = (direction ? outputs : inputs)[index];
+          const int count = SpeakerArr::getChannelCount(arrangement);
+          if (count > 2 || (!index && count < 1))
+            return kResultFalse;
+        }
+      for (int direction = 0; direction < 2; ++direction)
+        for (int index = 0; index < 2; ++index)
+          busChannels[direction][index] = SpeakerArr::getChannelCount(
+              (direction ? outputs : inputs)[index]);
+      return kResultOk;
+    }
     if (numOutputs != 1 || numInputs != (isInstrument(kind) ? 0 : 1))
       return kResultFalse;
     const auto count = SpeakerArr::getChannelCount(outputs[0]);
@@ -159,6 +187,15 @@ public:
   }
   tresult PLUGIN_API getBusArrangement(BusDirection direction, int32 index,
                                        SpeakerArrangement &arr) override {
+    if (kind == 9) {
+      if (index < 0 || index > 1)
+        return kInvalidArgument;
+      const int count = busChannels[direction][index];
+      arr = count == 0   ? SpeakerArr::kEmpty
+            : count == 1 ? SpeakerArr::kMono
+                         : SpeakerArr::kStereo;
+      return kResultOk;
+    }
     if (index != 0 || (isInstrument(kind) && direction == kInput))
       return kResultFalse;
     arr = channels == 1 ? SpeakerArr::kMono : SpeakerArr::kStereo;
@@ -252,6 +289,23 @@ public:
               ? 2 * dsp[0]
               : std::pow(10.0, normalizedParamToPlain(gainId, dsp[0]) / 20.0);
       const double frequency = normalizedParamToPlain(frequencyId, dsp[1]);
+      if (kind == 9) {
+        const float key = data.numInputs > 1 && data.inputs[1].numChannels
+                              ? data.inputs[1].channelBuffers32[0][i]
+                              : 0;
+        const float duck = std::abs(key) > .5f ? .25f : 1.0f;
+        // Read the source before writing any possibly aliased auxiliary output.
+        std::array<float, 2> source{};
+        for (int c = 0; c < data.inputs[0].numChannels; ++c)
+          source[c] = data.inputs[0].channelBuffers32[c][i];
+        if (data.numOutputs > 1)
+          for (int c = 0; c < data.outputs[1].numChannels; ++c)
+            data.outputs[1].channelBuffers32[c][i] =
+                .5f * source[c % data.inputs[0].numChannels];
+        for (int c = 0; c < data.outputs[0].numChannels; ++c)
+          data.outputs[0].channelBuffers32[c][i] = source[c] * duck;
+        continue;
+      }
       for (int32 c = 0; data.numOutputs && c < data.outputs[0].numChannels;
            ++c) {
         float input = isInstrument(kind)
@@ -385,6 +439,7 @@ private:
   }
   std::atomic<uint32> references{1};
   int kind, channels = 2, position = 0, maxBlockSize = 8192;
+  int busChannels[2][2] = {{2, 2}, {2, 2}};
   bool note = false;
   uint64 blocks = 0;
   double frequencyMaximum = 20000;

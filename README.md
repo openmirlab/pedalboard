@@ -188,8 +188,8 @@ An active graph stream requires stable unit mappings until the root is reset.
 For streaming, explicitly reset the root/plugin first and use `reset=False` on
 matching slices. Starting curves after warm scalar processing also requires a
 reset. Do not change plugin state/presets or process participating children
-independently during an active graph session. AU automation, buses, transport and
-warm-state cloning are separate capabilities.
+independently during an active graph session. See below for AU automation and
+explicit audio buses; transport and warm-state cloning remain separate capabilities.
 
 ### Audio Unit automation on macOS
 
@@ -238,6 +238,27 @@ updates the native host readback and affects rendered audio, followed by another
 automation curve without reset. Direct GUI-to-host/audio roundtrip for CHOW AUv2,
 other AUv3 vendors and other architectures is not covered; this is not universal
 plugin compatibility.
+
+## Explicit main, sidechain and auxiliary buses
+
+```python
+print(vst.audio_buses)  # Inspect each direction's indices, names and layouts.
+outputs = vst.process_buses(
+    {0: main_audio, 1: detector_audio}, sample_rate,
+    output_buses={0: 2},
+)
+processed_main = outputs[0]
+```
+
+Each input is an explicit planar `(channels, frames)` float32/float64 array.
+Select independent output buses by index and channel count; each returned array
+owns its memory. This API returns raw plugin latency and preserves continuous
+processing with `reset=False`. Reset before changing native layout, sample rate
+or switching processing APIs. VST3 omitted buses are requested disabled; the
+inherited AU host keeps omitted inputs active with silence and discards omitted
+outputs. Native layout negotiation may reject unsupported combinations after
+reset. See the [hosting contract](docs/source/hosting.rst) for state boundaries,
+supported arrangements, timing and verification scope.
 
 ## Save and restore configurations
 
