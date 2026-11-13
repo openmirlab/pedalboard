@@ -86,8 +86,8 @@ The usual audio-layout detection rules still apply: establish the channel layout
 with an unambiguous block before tiny or square multichannel fragments.
 Omit ``automation`` (or pass ``None`` or an empty dict) to use the existing
 scalar processing path. ``Pedalboard``/``Chain``/``Mix`` also accept effect-instance
-mappings, as described below. External-plugin parameter automation is not
-supported. Additional dynamics controls are listed below.
+mappings, as described below. VST3 physical-unit automation is described in the
+VST3 section below; Audio Unit automation is not included. Additional dynamics controls are listed below.
 
 Dynamics controls
 ~~~~~~~~~~~~~~~~~
@@ -538,8 +538,9 @@ Effect-chain automation
 
 ``Pedalboard``, ``Chain`` and ``Mix`` accept
 ``automation={effect_instance: {parameter_name: numpy_curve}}`` on ``process`` and
-``__call__``. Targets must be unique reachable supported builtin instances, not
-containers, indices, strings or foreign effects. Uncontrolled effects and ``None``
+``__call__``. Targets must be unique reachable supported builtin, VST3 or Audio Unit
+instances, not containers, indices, strings or foreign effects. External plugin
+curves use displayed parameter units. Uncontrolled effects and ``None``
 branches retain scalar behavior. Containers and their public child identities are
 not replaced. Duplicate references and cycles are rejected before processing.
 
@@ -565,7 +566,177 @@ new stream. The first prepared native capacity is retained (at most 8192 frames)
 larger calls reuse it in sub-blocks, so buffer-size growth does not reset history.
 Configure scalar defaults before starting; active lanes use curves.
 Independently processing/resetting a participating child or nested container during
-a root session is unsupported and requires restarting the root. VST/AU event
-routing and arbitrary state cloning are separate capabilities, not part of this
-interface. Serialize calls that continue the same streaming session. Scalar calls
+a root session is unsupported and requires restarting the root. VST3 parameter
+curves are supported as described below. AU events, buses/transport and arbitrary
+state cloning remain separate capabilities. Serialize calls that continue the same streaming session. Scalar calls
 on graphs without an active session retain the original processing path.
+
+
+VST3 display-unit curves
+-----------------------
+
+``VST3Plugin.process`` and ``__call__`` accept ``automation={parameter_name: curve}``
+for both audio effects and MIDI instruments. Existing Python parameter names and
+displayed numeric values are used: e.g. dB, Hz and percentages. These are not
+normalized0–1 curves. ``Pedalboard``/``Chain``/``Mix`` use the same instance-keyed
+mapping as for builtins, and can mix VST3 and builtin targets.
+
+Each real NumPy curve has one value per input frame, shared across channels. For
+MIDI, the count equals the renderer's duration-derived frame count and values use
+the instrument's input clock alongside MIDI messages. Literal infinite display
+endpoints are accepted only when they identify a reported endpoint. Boolean arrays
+and0/1 values are accepted for recognized boolean parameters; other curves must
+contain real numeric values. Text-only choices, program selectors and non-automatable
+parameters are rejected. Ambiguous names require a plugin with unambiguous names;
+no parameter is silently selected. Existing scalar configuration remains available.
+
+Conversion does not invoke the legacy Python range-guessing wrapper or its
+parameter-mutating fallback. It checks a controller's numeric display model and
+uses the SDK plain conversion only if it agrees with display units; otherwise it
+uses the controller's text parser. Every requested value is checked for range and
+round-trip agreement at display precision. Unreliable conversions raise errors.
+Reported unit labels take precedence; unlabeled Hz/kHz displays use Hz, consistent
+with existing scalar naming. The plugin's own quantization is retained, and final
+normalized targets have the existing host's float32 precision. There is no
+interpolated lookup-table approximation or promise of more precision than a plugin
+provides. Curves validate against the current controller model before parameter
+setters, reset or DSP preparation. After preparation, the model is checked again;
+format-dependent changes trigger reconversion before audio processing. If a target
+is valid only in the new format's range, call
+``vst.prepare_automation(sample_rate, num_channels=2)`` first and render with
+``reset=False``. This method resets processing state. A conversion failure after
+preparation does not restore prior DSP state; correct the curves and restart.
+Unit mappings must remain stable during an active graph session; a model change
+requires restarting the root.
+Stable VST3 ParamIDs, not raw parameter pointers, survive instance reloads.
+
+``automation_mode`` is host configuration, set before a session:
+
+* ``"sample_steps"`` (default) coalesces equal synchronized targets and processes
+  those spans in native code. It supports plugins reading only a block's final
+  parameter value. Dense curves can require one VST processing call per frame.
+* ``"vst3_events"`` sends all targets through ordered VST3 parameter queues with
+  their sample offsets, retaining larger blocks. Use this only when the plugin
+  consumes the points correctly; some plugins read only the final point. The host
+  cannot infer that support from the standard automatable flag.
+
+Neither mode invokes Python per audio frame. Both retain plugin smoothing,
+windowing and block-dependent DSP; exact host delivery is not a guarantee of an
+instantaneous audible response. VST3 queue semantics are documented by
+`Steinberg <https://steinbergmedia.github.io/vst3_doc/vstinterfaces/classSteinberg_1_1Vst_1_1IParameterChanges.html>`_.
+
+Automated streams retain an8192-frame prepared capacity and subdivide larger calls
+to avoid reprepare on block growth. Use ``reset=False`` on matching slices after
+explicitly resetting the plugin/root. A warm scalar-to-curve transition, mode or
+audio-format change requires a reset. Scalar calls following an automated stream
+hold final targets on that prepared engine. Reset preserves requested parameter
+values. Presets/state and participating children must not be independently changed
+during a root session. MIDI timestamps retain double precision and sample-aligned
+values are snapped only within floating-point rounding error before integer-frame
+conversion. Genuine fractional-frame positions retain the existing truncation rule.
+
+Standalone VST3 reset and audio/MIDI rendering share the instance lock. This does
+not remove a third-party plugin's own main-thread requirements. Scalar paths remain
+unchanged except the corrected MIDI timestamp precision/locking and validation of
+unsafe MIDI sizes. Instrument latency compensation, AU events, transport and bus
+hosting are not implemented by this change.
+
+
+Audio Unit display-unit curves
+-----------------------------
+
+On macOS, ``AudioUnitPlugin.process`` and ``__call__`` accept the same physical-unit
+``automation`` keyword on audio and MIDI entry points. Graphs use
+``automation={au_instance: {parameter_name: curve}}``. NumPy ownership, source-frame
+clock, joint validation, streaming omissions, stable lanes and root reset rules
+match VST3 and builtin graphs. Instrument latency compensation is unchanged.
+
+AU uses ``automation_mode="sample_steps"`` only; other modes raise an error.
+Changes at a frame are sent together through native AU setters before that span is
+rendered. Equal targets share a span. No Python calls occur per frame. Native
+scheduled/ramped AU events are not exposed. Exact host delivery does not remove
+plugin smoothing, internal update intervals or block-dependent DSP.
+
+Only stable global-scope UInt32 parameter IDs are used. Native parameter metadata
+supplies range, units, writable and non-real-time flags. Non-real-time/read-only
+parameters, ambiguous names and unreliable/non-numeric display models are rejected.
+When metadata values agree with display units, metadata provides the conversion;
+otherwise native AU string conversion is used. When an AU only names special
+endpoints and omits a parser, direct metadata values are tried and must still
+round-trip through the actual display. Range guessing and parameter mutation
+for unit discovery are not used. Text-only indexed choices are unsupported.
+Boolean curves accept bool or0/1; literal infinite displays are supported only at
+unambiguous endpoints. Native AU physical values and normalized targets are float32.
+For nonlinear display conversion, round-trip checks account for one physical float
+ULP by measuring the adjacent value through the plugin's own display function.
+This is native quantization, not a user-selected approximation tolerance.
+
+``prepare_automation(sample_rate, num_channels=2)`` and post-prepare range checking
+apply equally to AU. Restart with reset=False after explicit preparation. A failed
+post-preparation conversion does not roll back the prior DSP state. During a graph
+session, presets/state and participating children must not change independently.
+
+Actual AUv2 diagnostic effects/instruments, CHOWTapeModel.component and Magical8bit
+Plug2.component are tested on macOS arm64. AUv2 fixtures register only in the test
+process, without copying bundles to user/system plugin directories.
+
+Actual AUv3 extension verification
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The original no-UI AUv3 diagnostic extension is packaged in a containing app, signed
+ad-hoc and discovered through the public ``AudioUnitPlugin`` scanner. It is loaded
+out-of-process; a dedicated diagnostic mode returns the actual render PID in the
+audio buffer, which must differ from the Python host PID. This does not rely on
+process-local AUAudioUnit subclass registration. Typed dB/Hz and boolean curves,
+reported delay, MIDI note offsets/holds, graph queues, independent scalar
+continuation, parameter state, reset/reinstantiation and destruction are verified.
+
+The AU bridge's global UInt32 IDs can represent a plugin's original 64-bit
+AUParameterAddress values. Tests exercise a frequency at0x100000002 alongside a
+separate boolean at0x2, ensuring host controls do not truncate one into the other.
+This is tested bridge behavior; no direct 64-bit-address public API is introduced.
+
+The containing app must be registered with macOS for the extension to be discovered.
+The scanner compares decoded canonical filesystem paths, accepting relative paths,
+spaces/Unicode and symlinks, and returns all matching components in one ``.appex``.
+Unregistered extensions report an AUv3-specific error instead of suggesting an
+AUv2 Components directory. Async scans synchronize completion across threads and
+propagate worker exceptions. Tests isolate each check in a subprocess with a
+30-second bound; this is not a new universal plugin-load timeout guarantee.
+
+Automation retains native parameter ranges after format preparation. AUv3 parameter
+updates already flow through its framework bridge, so the host avoids an additional
+legacy global AUParameterListenerNotify broadcast, which can echo into its own
+listener and stall each sub-block. AUv2 retains the existing listener notification.
+Native scheduled events remain unavailable; AUv3 still uses ``sample_steps``.
+
+The AUv3 fixture requires a macOS user session with Xcode tools, CMake, codesign,
+PlugInKit and LaunchServices. It creates per-build identifiers, temporarily
+registers only generated app/extension bundles, refuses preexisting registrations
+and removes its entries on teardown. No developer signing certificate, App Store
+installation or copying to system plugin directories is required. Missing build or
+registration support fails the macOS tests, rather than silently skipping coverage.
+Other operating systems skip AU tests.
+
+Manual acceptance on macOS arm64 additionally covers an unchanged source build
+of `Morass v1.0.3 <https://github.com/bogware/morass/tree/v1.0.3>`_: nine constant
+dB/Hz checks across 44.1/48/96 kHz and buffer sizes 1/31/8192, three dense-curve
+comparisons against per-sample scalar setters, sparse streaming, boolean bypass
+and parameter-state/reset checks. All audio comparisons match exactly. The
+published installer contains AUv2/VST3 rather than AUv3; source-build acceptance
+is distinct from testing a vendor-distributed AUv3 binary.
+
+Morass AUv3 and CHOWTapeModel AUv2 native editors were visually checked for
+parameter-to-UI updates, automation with the editor open, close/reopen and reopening
+after automation preparation/reset. A human-operated Morass AUv3 check additionally
+verifies GUI control -> native host readback -> rendered audio: editing Input Gain
+to -12.0 dB produces normalized readback 0.25 and quieter output, followed by a
+-12 to -3 dB automation curve with no intervening reset. The GUI and native getter
+both show -3.0 dB afterward. Immediate output RMS is not an exact gain oracle
+because the plugin retains tails and envelope state.
+
+Physical UI automation could not reliably deliver input in this desktop session;
+the successful GUI action was performed by the human operator. Direct GUI-to-host/
+audio roundtrip for CHOW AUv2, other third-party AUv3 vendors and non-arm64
+architectures remain unverified. Plugin-specific main-thread requirements,
+internal smoothing and block behavior still apply.

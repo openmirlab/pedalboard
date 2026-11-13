@@ -23,6 +23,8 @@
   ==============================================================================
 */
 #pragma once
+#include <cstdint>
+#include <vector>
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #ifdef None
@@ -39,6 +41,38 @@
 #include <juce_dsp/juce_dsp.h>
 
 namespace juce {
+
+// Native automation bridge. IDs are VST3 ParamIDs, not mutable parameter
+// indices.
+struct PatchedVST3AutomationParameter {
+  uint32_t id;
+  String name, units;
+  int steps;
+  bool automatable, bypass;
+};
+struct PatchedVST3AutomationCurve {
+  uint32_t id;
+  const float *values;
+};
+PatchedVST3AutomationParameter
+describePatchedVST3Parameter(AudioPluginInstance &, int parameterIndex);
+PatchedVST3AutomationParameter
+describePatchedVST3ParameterById(AudioPluginInstance &, uint32_t id);
+String getPatchedVST3ParameterText(AudioPluginInstance &, uint32_t id,
+                                   double normalized);
+double getPatchedVST3ParameterFromText(AudioPluginInstance &, uint32_t id,
+                                       const String &text);
+double getPatchedVST3ParameterPlain(AudioPluginInstance &, uint32_t id,
+                                    double normalized);
+double getPatchedVST3ParameterNormalized(AudioPluginInstance &, uint32_t id,
+                                         double plain);
+void setPatchedVST3Parameter(AudioPluginInstance &, uint32_t id,
+                             float normalized);
+void reservePatchedVST3Automation(AudioPluginInstance &,
+                                  const std::vector<uint32_t> &ids, int frames);
+void processPatchedVST3Automation(
+    AudioPluginInstance &, AudioBuffer<float> &, MidiBuffer &,
+    const std::vector<PatchedVST3AutomationCurve> &);
 
 /**
     Implements a plugin format for VST3s.

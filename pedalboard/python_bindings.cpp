@@ -39,6 +39,7 @@ namespace py = pybind11;
 #include "plugin_templates/PrimeWithSilence.h"
 #include "plugin_templates/Resample.h"
 
+#include "au_automation.h"
 #include "chain_automation.h"
 #include "plugins/AddLatency.h"
 #include "plugins/Bitcrush.h"
@@ -64,6 +65,7 @@ namespace py = pybind11;
 #include "plugins/Phaser.h"
 #include "plugins/PitchShift.h"
 #include "plugins/Reverb.h"
+#include "vst3_automation.h"
 
 #include "io/AudioFileInit.h"
 #include "io/AudioStream.h"
@@ -235,6 +237,8 @@ If the number of samples and the number of channels are the same, each
   init_reverb(m);
 
   init_external_plugins(m);
+  init_vst3_automation(m);
+  init_au_automation(m);
 
   // Classes that don't perform any audio effects, but that add other utilities:
   py::module utils = m.def_submodule("utils");

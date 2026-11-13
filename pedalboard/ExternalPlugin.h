@@ -27,9 +27,12 @@
 
 #include "AudioUnitParser.h"
 #include "Plugin.h"
+#include "au_automation_bridge.h"
+#include <atomic>
 #include <pybind11/stl.h>
 
 #include "juce_overrides/juce_PatchedVST3PluginFormat.h"
+#include "parameter_automation.h"
 #include "process.h"
 
 #if JUCE_MAC
@@ -219,10 +222,10 @@ juce::MidiBuffer parseMidiBufferFromPython(py::object midiMessages,
         "should be reported.");
   }
 
-  std::vector<std::tuple<py::bytes, float>> normalizedBuffer =
-      pyNormalizedBuffer.cast<std::vector<std::tuple<py::bytes, float>>>();
+  std::vector<std::tuple<py::bytes, double>> normalizedBuffer =
+      pyNormalizedBuffer.cast<std::vector<std::tuple<py::bytes, double>>>();
 
-  for (const std::tuple<py::bytes, float> &tuple : normalizedBuffer) {
+  for (const std::tuple<py::bytes, double> &tuple : normalizedBuffer) {
     char *messagePointer;
     py::ssize_t messageLength;
 
@@ -233,7 +236,21 @@ juce::MidiBuffer parseMidiBufferFromPython(py::object midiMessages,
           "Pedalboard error and should be reported.");
     }
 
-    long sampleIndex = (std::get<1>(tuple) * sampleRate);
+    double position = std::get<1>(tuple) * (double)sampleRate;
+    if (!std::isfinite(position))
+      throw std::invalid_argument("MIDI timestamps must be finite");
+    // Keep fractional positions' existing truncation rule, but do not turn an
+    // exactly sample-aligned Python timestamp into the preceding sample.
+    const double nearest = std::round(position);
+    if (std::abs(position - nearest) <= std::numeric_limits<double>::epsilon() *
+                                            32 *
+                                            std::max(1.0, std::abs(position)))
+      position = nearest;
+    // Safe renders are limited to INT_MAX frames; farther events cannot occur
+    // in the returned buffer. Do not let an integer wrap create an early note.
+    if (position > INT_MAX || position < INT_MIN)
+      continue;
+    const int sampleIndex = (int)position;
     buf.addEvent(messagePointer, messageLength, sampleIndex);
   }
 
@@ -335,26 +352,36 @@ scanPluginDescriptions(std::string filename) {
           juce::MessageManager::getInstance()->isThisTheMessageThread()) {
         // We can't scan AUv3 plugins synchronously, so we have to pump the
         // message thread and wait for the scan to complete on another thread.
-        bool done = false;
-        std::thread thread =
-            std::thread([&identifier, &typesFound, &format, &done]() {
-              format.findAllTypesForFile(typesFound, identifier);
-              done = true;
-            });
+        std::atomic<bool> done{false};
+        std::exception_ptr scanError;
+        std::thread thread = std::thread([&] {
+          try {
+            format.findAllTypesForFile(typesFound, identifier);
+          } catch (...) {
+            scanError = std::current_exception();
+          }
+          done.store(true, std::memory_order_release);
+        });
 
         // Pump the message thread until the scan is complete:
-        while (!done) {
+        while (!done.load(std::memory_order_acquire)) {
           juce::MessageManager::getInstance()->runDispatchLoopUntil(1);
         }
 
         thread.join();
+        if (scanError)
+          std::rethrow_exception(scanError);
       } else {
         format.findAllTypesForFile(typesFound, identifiers[i]);
       }
     }
 
     if (typesFound.isEmpty() && !audioUnitIsInstalled(filename)) {
-      errorMessage += " " + AUDIO_UNIT_NOT_INSTALLED_ERROR;
+      if (juce::File(filename).hasFileExtension(".appex"))
+        errorMessage += " AUv3 extensions must be registered with macOS from "
+                        "their containing application before loading.";
+      else
+        errorMessage += " " + AUDIO_UNIT_NOT_INSTALLED_ERROR;
     }
   } else {
     format.findAllTypesForFile(typesFound, filename);
@@ -626,6 +653,7 @@ public:
 
       throw pybind11::import_error(errorMessage);
     }
+    scalarHasProcessed = false;
   }
 
   ~ExternalPlugin() {
@@ -1094,6 +1122,14 @@ public:
    */
   void reset() override {
     if (pluginInstance) {
+      if ((reloadType == ExternalPluginReloadType::Unknown ||
+           reloadType == ExternalPluginReloadType::PersistsAudioOnReset) &&
+          !juce::MessageManager::getInstance()->isThisTheMessageThread())
+        throw std::runtime_error("Plugin must be reloaded on the main thread; "
+                                 "use reset=False on worker threads");
+      // Reinstantiation may call prepare() internally with an invalidated
+      // channel cache. This is a reset, not an illegal streaming format change.
+      automationActive = false;
       switch (reloadType) {
       case ExternalPluginReloadType::ClearsAudioOnReset:
         pluginInstance->reset();
@@ -1115,6 +1151,11 @@ public:
       // Force prepare() to be called again later by invalidating lastSpec:
       lastSpec.maximumBlockSize = 0;
       samplesProvided = 0;
+      automationActive = false;
+      scalarHasProcessed = false;
+#if JUCE_MAC && JUCE_PLUGINHOST_AU
+      auAutomationParameters.clear();
+#endif
     }
   }
 
@@ -1122,7 +1163,14 @@ public:
    * prepare() is called on every render call, regardless of if the plugin has
    * been reset.
    */
-  void prepare(const juce::dsp::ProcessSpec &spec) override {
+  void prepare(const juce::dsp::ProcessSpec &requestedSpec) override {
+    auto spec = requestedSpec;
+    if (automationActive && (spec.sampleRate != lastSpec.sampleRate ||
+                             spec.numChannels != lastSpec.numChannels))
+      throw std::invalid_argument(
+          "Reset the plugin/root before changing automated audio format");
+    if (automationRequested || automationActive)
+      spec.maximumBlockSize = DEFAULT_BUFFER_SIZE;
     if (!pluginInstance) {
       return;
     }
@@ -1145,91 +1193,295 @@ public:
     }
   }
 
+  void prepareAutomation(double rate, unsigned int channels) {
+    if (!std::isfinite(rate) || rate <= 0 || !channels || channels > INT_MAX)
+      throw std::invalid_argument(
+          "Invalid automation preparation rate or channel count");
+    validateAutomationStart(true, rate, channels);
+    automationRequested = false;
+    reset();
+    automationRequested = true;
+    try {
+      juce::dsp::ProcessSpec spec{rate, DEFAULT_BUFFER_SIZE, channels};
+      prepare(spec);
+    } catch (...) {
+      automationRequested = false;
+      throw;
+    }
+    automationRequested = false;
+    samplesProvided = 0;
+    scalarHasProcessed = false;
+  }
+
+  std::string getAutomationMode() {
+    std::scoped_lock lock(this->mutex);
+    return sampleSteps ? "sample_steps" : "vst3_events";
+  }
+  void setAutomationMode(const std::string &mode) {
+    std::scoped_lock lock(this->mutex);
+    if (mode != "sample_steps" && mode != "vst3_events")
+      throw std::invalid_argument(
+          "automation_mode must be sample_steps or vst3_events");
+#if JUCE_MAC && JUCE_PLUGINHOST_AU
+    if constexpr (std::is_same_v<ExternalPluginType,
+                                 juce::AudioUnitPluginFormat>) {
+      if (mode != "sample_steps")
+        throw std::invalid_argument(
+            "Audio Unit automation supports sample_steps only");
+    }
+#endif
+    const bool requested = mode == "sample_steps";
+    if (automationActive && requested != sampleSteps)
+      throw std::invalid_argument(
+          "Reset the plugin/root before changing automation_mode");
+    sampleSteps = requested;
+  }
+  void validateAutomationStart(bool reset, double rate,
+                               unsigned int channels) const {
+    if (!reset && scalarHasProcessed && !automationActive)
+      throw std::invalid_argument("Start plugin automation with reset=True or "
+                                  "explicitly reset the plugin/root first");
+    if (!reset && automationActive &&
+        (rate != lastSpec.sampleRate || channels != lastSpec.numChannels))
+      throw std::invalid_argument(
+          "Reset the plugin/root before changing automated audio format");
+    auto *output = pluginInstance->getBus(false, 0);
+    if (!output || !output->isNumberOfChannelsSupported((int)channels))
+      throw std::invalid_argument(
+          "Plugin automation does not support the requested output channels");
+    if (!foundPluginDescription.isInstrument) {
+      auto *input = pluginInstance->getBus(true, 0);
+      if (!input || !input->isNumberOfChannelsSupported((int)channels))
+        throw std::invalid_argument(
+            "Plugin automation does not support the requested input channels");
+    }
+  }
+
+  juce::AudioPluginInstance &automationInstance() { return *pluginInstance; }
+  void requestAutomation() { automationRequested = true; }
+  void beginAutomation(const std::vector<uint32_t> &ids) {
+    if (!automationActive)
+      samplesProvided = 0;
+    if constexpr (std::is_same_v<ExternalPluginType,
+                                 juce::PatchedVST3PluginFormat>)
+      juce::reservePatchedVST3Automation(*pluginInstance, ids,
+                                         DEFAULT_BUFFER_SIZE);
+#if JUCE_MAC && JUCE_PLUGINHOST_AU
+    else
+      for (auto id : ids)
+        auAutomationParameters[id] =
+            AudioUnitAutomationBackend::describeById(*pluginInstance, id);
+#endif
+    automationRequested = false;
+    automationActive = true;
+  }
+  void processHostedAutomation(
+      juce::AudioBuffer<float> &audio, juce::MidiBuffer &midi,
+      const std::vector<juce::PatchedVST3AutomationCurve> &curves) {
+    if constexpr (std::is_same_v<ExternalPluginType,
+                                 juce::PatchedVST3PluginFormat>)
+      juce::processPatchedVST3Automation(*pluginInstance, audio, midi, curves);
+#if JUCE_MAC && JUCE_PLUGINHOST_AU
+    else {
+      for (const auto &curve : curves)
+        AudioUnitAutomationBackend::setPrepared(
+            *pluginInstance, auAutomationParameters.at(curve.id),
+            curve.values[0]);
+      pluginInstance->processBlock(audio, midi);
+    }
+#endif
+  }
   int process(
       const juce::dsp::ProcessContextReplacing<float> &context) override {
-
-    if (pluginInstance) {
-      juce::MidiBuffer emptyMidiBuffer;
-
-      if (pluginInstance->getMainBusNumInputChannels() == 0 &&
-          context.getInputBlock().getNumChannels() > 0) {
-        throw std::invalid_argument(
-            "Plugin '" + pluginInstance->getName().toStdString() +
-            "' does not accept audio input. It may be an instrument plugin "
-            "instead of an effect plugin.");
+    return processScheduled(context, nullptr, 0);
+  }
+  int processAutomated(const juce::dsp::ProcessContextReplacing<float> &context,
+                       const std::vector<DenseParameterControl> &controls,
+                       size_t cursor) {
+    return processScheduled(context, &controls, cursor);
+  }
+  size_t scheduledSpanEnd(size_t start, size_t frames,
+                          const std::vector<DenseParameterControl> *controls,
+                          size_t cursor) const {
+    size_t end = std::min(start + (size_t)DEFAULT_BUFFER_SIZE, frames);
+    if (controls && sampleSteps) {
+      for (size_t frame = start + 1; frame < end; ++frame) {
+        for (const auto &control : *controls) {
+          if (control.values[cursor + frame] != control.values[cursor + start])
+            return frame;
+        }
       }
+    }
+    return end;
+  }
+  // One workspace per scheduled context, reused by every native sub-block.
+  // It is local to the render under the existing instance lock, not shared
+  // state.
+  struct AudioProcessWorkspace {
+    // Mono/stereo need no heap allocation for channel pointers. Larger layouts
+    // use the same workspace with overflow storage, without a channel limit.
+    std::array<float *, 2> inlineChannels{};
+    std::vector<float *> overflowChannels;
+    size_t numChannels = 0;
+    float **channelPointers() {
+      return overflowChannels.empty() ? inlineChannels.data()
+                                      : overflowChannels.data();
+    }
+    std::vector<std::vector<float>> scratch;
+    std::vector<juce::PatchedVST3AutomationCurve> curves;
+    juce::MidiBuffer midi;
+  };
 
-      const juce::dsp::AudioBlock<const float> &inputBlock =
-          context.getInputBlock();
-      juce::dsp::AudioBlock<float> &outputBlock = context.getOutputBlock();
-
-      if ((size_t)pluginInstance->getMainBusNumInputChannels() !=
-          inputBlock.getNumChannels()) {
-        throw std::invalid_argument(
-            "Plugin '" + pluginInstance->getName().toStdString() +
-            "' was instantiated with " +
-            std::to_string(pluginInstance->getMainBusNumInputChannels()) +
-            "-channel input, but provided audio data contained " +
-            std::to_string(inputBlock.getNumChannels()) + " channel" +
-            (inputBlock.getNumChannels() == 1 ? "" : "s") + ".");
-      }
-
-      if ((size_t)pluginInstance->getMainBusNumOutputChannels() <
-          inputBlock.getNumChannels()) {
-        throw std::invalid_argument(
-            "Plugin '" + pluginInstance->getName().toStdString() +
-            "' produces " +
-            std::to_string(pluginInstance->getMainBusNumOutputChannels()) +
-            "-channel output, but provided audio data contained " +
-            std::to_string(inputBlock.getNumChannels()) + " channel" +
-            (inputBlock.getNumChannels() == 1 ? " " : "s") +
-            ". (The number of channels returned must match the "
-            "number of channels passed in.)");
-      }
-
-      std::vector<float *> channelPointers(
-          pluginInstance->getTotalNumOutputChannels());
-
-      for (size_t i = 0; i < outputBlock.getNumChannels(); i++) {
-        channelPointers[i] = outputBlock.getChannelPointer(i);
-      }
-
-      // Depending on the bus layout, we may have to pass extra buffers to the
-      // plugin that we don't use. Use vector here to ensure the memory is
-      // freed via RAII.
-      std::vector<std::vector<float>> dummyChannels;
-      for (size_t i = outputBlock.getNumChannels(); i < channelPointers.size();
-           i++) {
-        std::vector<float> dummyChannel(outputBlock.getNumSamples());
-        channelPointers[i] = dummyChannel.data();
-        dummyChannels.push_back(std::move(dummyChannel));
-      }
-
-      // Create an audio buffer that doesn't actually allocate anything, but
-      // just points to the data in the ProcessContext.
-      juce::AudioBuffer<float> audioBuffer(channelPointers.data(),
-                                           channelPointers.size(),
-                                           outputBlock.getNumSamples());
-
-      pluginInstance->processBlock(audioBuffer, emptyMidiBuffer);
-      samplesProvided += outputBlock.getNumSamples();
-
-      // To compensate for any latency added by the plugin,
-      // only tell Pedalboard to use the last _n_ samples.
-      long usableSamplesProduced =
-          std::max(0L, samplesProvided - pluginInstance->getLatencySamples());
-      return static_cast<int>(
-          std::min(usableSamplesProduced, (long)outputBlock.getNumSamples()));
+  AudioProcessWorkspace prepareAudioWorkspace(
+      const juce::dsp::ProcessContextReplacing<float> &context,
+      const std::vector<DenseParameterControl> *controls, size_t maxFrames) {
+    if (pluginInstance->getMainBusNumInputChannels() == 0 &&
+        context.getInputBlock().getNumChannels() > 0) {
+      throw std::invalid_argument(
+          "Plugin '" + pluginInstance->getName().toStdString() +
+          "' does not accept audio input. It may be an instrument plugin "
+          "instead of an effect plugin.");
     }
 
-    return 0;
+    const juce::dsp::AudioBlock<const float> &inputBlock =
+        context.getInputBlock();
+    juce::dsp::AudioBlock<float> &outputBlock = context.getOutputBlock();
+
+    if ((size_t)pluginInstance->getMainBusNumInputChannels() !=
+        inputBlock.getNumChannels()) {
+      throw std::invalid_argument(
+          "Plugin '" + pluginInstance->getName().toStdString() +
+          "' was instantiated with " +
+          std::to_string(pluginInstance->getMainBusNumInputChannels()) +
+          "-channel input, but provided audio data contained " +
+          std::to_string(inputBlock.getNumChannels()) + " channel" +
+          (inputBlock.getNumChannels() == 1 ? "" : "s") + ".");
+    }
+
+    if ((size_t)pluginInstance->getMainBusNumOutputChannels() <
+        inputBlock.getNumChannels()) {
+      throw std::invalid_argument(
+          "Plugin '" + pluginInstance->getName().toStdString() + "' produces " +
+          std::to_string(pluginInstance->getMainBusNumOutputChannels()) +
+          "-channel output, but provided audio data contained " +
+          std::to_string(inputBlock.getNumChannels()) + " channel" +
+          (inputBlock.getNumChannels() == 1 ? " " : "s") +
+          ". (The number of channels returned must match the "
+          "number of channels passed in.)");
+    }
+
+    AudioProcessWorkspace workspace;
+    workspace.numChannels = pluginInstance->getTotalNumOutputChannels();
+    if (workspace.numChannels > workspace.inlineChannels.size())
+      workspace.overflowChannels.resize(workspace.numChannels);
+    workspace.scratch.resize(workspace.numChannels -
+                             outputBlock.getNumChannels());
+    for (auto &channel : workspace.scratch)
+      channel.resize(maxFrames);
+    if (controls) {
+      workspace.curves.reserve(controls->size());
+      for (const auto &control : *controls)
+        workspace.curves.push_back({*control.externalId, nullptr});
+    }
+    return workspace;
+  }
+
+  int processScheduled(const juce::dsp::ProcessContextReplacing<float> &context,
+                       const std::vector<DenseParameterControl> *controls,
+                       size_t cursor) {
+    if (!pluginInstance)
+      return 0;
+    auto block = context.getOutputBlock();
+    const bool scheduled = controls || automationActive;
+    auto workspace = prepareAudioWorkspace(
+        context, controls,
+        scheduled ? std::min(block.getNumSamples(), (size_t)DEFAULT_BUFFER_SIZE)
+                  : block.getNumSamples());
+    if (!scheduled) {
+      const int returned = processOneBlock(context, nullptr, 0, workspace);
+      scalarHasProcessed = true;
+      return returned;
+    }
+    size_t valid = 0;
+    for (size_t start = 0; start < block.getNumSamples();) {
+      const auto end =
+          scheduledSpanEnd(start, block.getNumSamples(), controls, cursor);
+      const auto count = end - start;
+      auto span = block.getSubBlock(start, count);
+      juce::dsp::ProcessContextReplacing<float> part(span);
+      const int returned =
+          processOneBlock(part, controls, cursor + start, workspace);
+      if (returned < 0 || returned > (int)count)
+        throw std::runtime_error("Invalid plugin output frame count");
+      const size_t source = start + count - returned;
+      if (returned && source != valid)
+        for (size_t c = 0; c < block.getNumChannels(); ++c)
+          std::memmove(block.getChannelPointer(c) + valid,
+                       block.getChannelPointer(c) + source,
+                       sizeof(float) * returned);
+      valid += returned;
+      start = end;
+    }
+    if (valid && valid != block.getNumSamples())
+      for (size_t c = 0; c < block.getNumChannels(); ++c)
+        std::memmove(block.getChannelPointer(c) + block.getNumSamples() - valid,
+                     block.getChannelPointer(c), sizeof(float) * valid);
+    return (int)valid;
+  }
+
+  int processOneBlock(const juce::dsp::ProcessContextReplacing<float> &context,
+                      const std::vector<DenseParameterControl> *controls,
+                      size_t cursor, AudioProcessWorkspace &workspace) {
+    auto &outputBlock = context.getOutputBlock();
+    for (size_t c = 0; c < outputBlock.getNumChannels(); ++c)
+      workspace.channelPointers()[c] = outputBlock.getChannelPointer(c);
+    for (size_t c = 0; c < workspace.scratch.size(); ++c) {
+      // Unused output buses still receive fresh zeroed input on every call.
+      // A plugin may have written to these buffers during the preceding span.
+      auto &channel = workspace.scratch[c];
+      std::fill_n(channel.data(), outputBlock.getNumSamples(), 0.0f);
+      workspace.channelPointers()[outputBlock.getNumChannels() + c] =
+          channel.data();
+    }
+    juce::AudioBuffer<float> audioBuffer(workspace.channelPointers(),
+                                         workspace.numChannels,
+                                         outputBlock.getNumSamples());
+    // Discard any MIDI emitted by the previous audio-only sub-block.
+    workspace.midi.clear();
+    if (controls) {
+      for (size_t i = 0; i < controls->size(); ++i)
+        workspace.curves[i].values = (*controls)[i].values.data() + cursor;
+      processHostedAutomation(audioBuffer, workspace.midi, workspace.curves);
+    } else
+      pluginInstance->processBlock(audioBuffer, workspace.midi);
+    samplesProvided += outputBlock.getNumSamples();
+
+    // Keep querying latency: a plugin can report a new latency while
+    // processing.
+    const long usableSamplesProduced =
+        std::max(0L, samplesProvided - pluginInstance->getLatencySamples());
+    return static_cast<int>(
+        std::min(usableSamplesProduced, (long)outputBlock.getNumSamples()));
   }
 
   py::array_t<float> renderMIDIMessages(py::object midiMessages, float duration,
                                         float sampleRate,
                                         unsigned int numChannels,
                                         unsigned long bufferSize, bool reset) {
-
+    return renderMIDIMessagesAutomated(midiMessages, duration, sampleRate,
+                                       numChannels, bufferSize, reset, {});
+  }
+  py::array_t<float> renderMIDIMessagesAutomated(
+      py::object midiMessages, float duration, float sampleRate,
+      unsigned int numChannels, unsigned long bufferSize, bool reset,
+      std::shared_ptr<DenseParameterProcessor> automation) {
+    if (!std::isfinite(duration) || duration < 0 ||
+        !std::isfinite(sampleRate) || sampleRate <= 0 || bufferSize == 0 ||
+        bufferSize > INT_MAX || !numChannels || numChannels > INT_MAX ||
+        !std::isfinite(duration * sampleRate) ||
+        (double)(duration * sampleRate) > INT_MAX)
+      throw std::invalid_argument(
+          "Unsafe MIDI duration, sample rate, channels or buffer size");
     // Tiny quality-of-life improvement to try to detect if people have swapped
     // the duration and sample_rate arguments:
     if ((duration == 48000 || duration == 44100 || duration == 22050 ||
@@ -1245,8 +1497,6 @@ public:
           "and duration arguments provided to this method.");
     }
 
-    std::scoped_lock<std::mutex>(this->mutex);
-
     py::array_t<float> outputArray;
     unsigned long outputSampleCount = duration * sampleRate;
 
@@ -1258,17 +1508,39 @@ public:
 
     float *outputArrayPointer = static_cast<float *>(outputArray.request().ptr);
 
+    if (automation && outputSampleCount == 0)
+      return outputArray;
     py::gil_scoped_release release;
+    std::scoped_lock lock(this->mutex);
 
     if (pluginInstance) {
-      if (reset)
-        this->reset();
+      if (!foundPluginDescription.isInstrument)
+        throw std::invalid_argument("Plugin expects audio, not MIDI input");
+      if (!pluginInstance->getBus(false, 0)->isNumberOfChannelsSupported(
+              (int)numChannels))
+        throw std::invalid_argument(
+            "Plugin does not support the requested MIDI output channels");
+      if (automation) {
+        automation->validateOnly();
+        automation->commitValidation();
+      }
+      if (reset) {
+        if (automation)
+          automation->reset();
+        else
+          this->reset();
+      }
 
       juce::dsp::ProcessSpec spec;
       spec.sampleRate = sampleRate;
       spec.maximumBlockSize = (juce::uint32)bufferSize;
       spec.numChannels = (juce::uint32)numChannels;
-      prepare(spec);
+      if (automation)
+        automation->prepare(spec);
+      else
+        prepare(spec);
+      if (!automation && !automationActive)
+        scalarHasProcessed = true;
 
       if (!foundPluginDescription.isInstrument) {
         throw std::invalid_argument(
@@ -1289,11 +1561,20 @@ public:
       std::memset((void *)outputArrayPointer, 0,
                   sizeof(float) * numChannels * outputSampleCount);
 
+      std::vector<float *> channelPointers(numChannels),
+          partPointers(numChannels);
+      std::vector<juce::PatchedVST3AutomationCurve> curves;
+      const auto *controls = automation ? &automation->getControls() : nullptr;
+      if (controls) {
+        curves.reserve(controls->size());
+        for (const auto &control : *controls)
+          curves.push_back({*control.externalId, nullptr});
+      }
+      juce::MidiBuffer midiChunk, midiPart;
       for (unsigned long i = 0; i < outputSampleCount; i += bufferSize) {
         unsigned long chunkSampleCount =
             std::min((unsigned long)bufferSize, outputSampleCount - i);
 
-        std::vector<float *> channelPointers(numChannels);
         for (size_t c = 0; c < numChannels; c++) {
           channelPointers[c] =
               (outputArrayPointer + (outputSampleCount * c) + i);
@@ -1304,10 +1585,31 @@ public:
         juce::AudioBuffer<float> audioChunk(
             channelPointers.data(), channelPointers.size(), chunkSampleCount);
 
-        juce::MidiBuffer midiChunk;
+        midiChunk.clear();
         midiChunk.addEvents(midiInputBuffer, i, chunkSampleCount, -i);
 
-        pluginInstance->processBlock(audioChunk, midiChunk);
+        if (automation || automationActive) {
+          for (size_t start = 0; start < chunkSampleCount;) {
+            const size_t end =
+                scheduledSpanEnd(start, chunkSampleCount, controls, i);
+            for (size_t c = 0; c < numChannels; ++c)
+              partPointers[c] = audioChunk.getWritePointer((int)c, (int)start);
+            juce::AudioBuffer<float> part(partPointers.data(), (int)numChannels,
+                                          (int)(end - start));
+            midiPart.clear();
+            midiPart.addEvents(midiChunk, (int)start, (int)(end - start),
+                               -(int)start);
+            if (controls) {
+              for (size_t lane = 0; lane < controls->size(); ++lane)
+                curves[lane].values =
+                    (*controls)[lane].values.data() + i + start;
+              processHostedAutomation(part, midiPart, curves);
+            } else
+              pluginInstance->processBlock(part, midiPart);
+            start = end;
+          }
+        } else
+          pluginInstance->processBlock(audioChunk, midiChunk);
       }
     }
 
@@ -1417,6 +1719,12 @@ private:
   juce::String pathToPluginFile;
   juce::AudioPluginFormatManager pluginFormatManager;
   std::unique_ptr<juce::AudioPluginInstance> pluginInstance;
+#if JUCE_MAC && JUCE_PLUGINHOST_AU
+  std::map<uint32_t, AudioUnitAutomationBackend::Parameter>
+      auAutomationParameters;
+#endif
+  bool automationRequested = false, automationActive = false;
+  bool scalarHasProcessed = false, sampleSteps = true;
 
   long samplesProvided = 0;
   float initializationTimeout = DEFAULT_INITIALIZATION_TIMEOUT_SECONDS;

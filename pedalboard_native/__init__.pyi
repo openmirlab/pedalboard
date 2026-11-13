@@ -6,6 +6,7 @@ from __future__ import annotations
 import pedalboard_native
 import enum
 import typing
+from typing import overload as _typing_overload
 
 original_overload = typing.overload
 __OVERLOADED_DOCSTRINGS = {}
@@ -1571,13 +1572,15 @@ class AudioUnitPlugin(ExternalPlugin):
     *Support for loading AUv3 plugins (* ``.appex`` *bundles) introduced in v0.9.5.*
     """
 
-    @typing.overload
+    @_typing_overload
     def __call__(
         self,
         input_array: NDArray[float32],
         sample_rate: float | int,
         buffer_size: int = 8192,
         reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
     ) -> NDArray[float32]:
         """
         Run an audio or MIDI buffer through this plugin, returning audio. Alias for :py:meth:`process`.
@@ -1585,7 +1588,7 @@ class AudioUnitPlugin(ExternalPlugin):
         Run an audio or MIDI buffer through this plugin, returning audio. Alias for :py:meth:`process`.
         """
 
-    @typing.overload
+    @_typing_overload
     def __call__(
         self,
         midi_messages: typing.List[MIDIMessageLike],
@@ -1594,6 +1597,8 @@ class AudioUnitPlugin(ExternalPlugin):
         num_channels: int = 2,
         buffer_size: int = 8192,
         reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
     ) -> NDArray[float32]: ...
     def __init__(
         self,
@@ -1612,13 +1617,15 @@ class AudioUnitPlugin(ExternalPlugin):
         Note that most Audio Units have a single plugin inside, but this method can be useful to determine if multiple plugins are present in one bundle, and if so, what their names are.
         """
 
-    @typing.overload
+    @_typing_overload
     def process(
         self,
         input_array: NDArray[float32],
         sample_rate: float | int,
         buffer_size: int = 8192,
         reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
     ) -> NDArray[float32]:
         """
         Pass a buffer of audio (as a 32- or 64-bit NumPy array) *or* a list of
@@ -1791,7 +1798,7 @@ class AudioUnitPlugin(ExternalPlugin):
 
         """
 
-    @typing.overload
+    @_typing_overload
     def process(
         self,
         midi_messages: typing.List[MIDIMessageLike],
@@ -1800,6 +1807,8 @@ class AudioUnitPlugin(ExternalPlugin):
         num_channels: int = 2,
         buffer_size: int = 8192,
         reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
     ) -> NDArray[float32]: ...
     def show_editor(self, close_event: typing.Optional[threading.Event] = None) -> None:
         """
@@ -1964,6 +1973,14 @@ class AudioUnitPlugin(ExternalPlugin):
 
         """
     pass
+
+    def prepare_automation(self, sample_rate: float, num_channels: int = 2) -> None:
+        """Reset and configure physical-unit ranges; continue with reset=False."""
+    @property
+    def automation_mode(self) -> typing.Literal["sample_steps"]:
+        """Precision-first native constant-span processing for Audio Units."""
+    @automation_mode.setter
+    def automation_mode(self, value: typing.Literal["sample_steps"]) -> None: ...
 
 class PluginContainer(Plugin):
     """
@@ -2352,13 +2369,15 @@ class VST3Plugin(ExternalPlugin):
         Load a VST3 preset file in .vstpreset format.
         """
 
-    @typing.overload
+    @_typing_overload
     def process(
         self,
         input_array: NDArray[float32],
         sample_rate: float | int,
         buffer_size: int = 8192,
         reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
     ) -> NDArray[float32]:
         """
         Pass a buffer of audio (as a 32- or 64-bit NumPy array) *or* a list of
@@ -2531,7 +2550,7 @@ class VST3Plugin(ExternalPlugin):
 
         """
 
-    @typing.overload
+    @_typing_overload
     def process(
         self,
         midi_messages: typing.List[MIDIMessageLike],
@@ -2540,6 +2559,8 @@ class VST3Plugin(ExternalPlugin):
         num_channels: int = 2,
         buffer_size: int = 8192,
         reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
     ) -> NDArray[float32]: ...
     def show_editor(self, close_event: typing.Optional[threading.Event] = None) -> None:
         """
@@ -2724,6 +2745,36 @@ class VST3Plugin(ExternalPlugin):
 
         """
     pass
+
+    def prepare_automation(self, sample_rate: float, num_channels: int = 2) -> None:
+        """Reset and configure the display-unit model; continue with reset=False."""
+    @property
+    def automation_mode(self) -> typing.Literal["sample_steps", "vst3_events"]:
+        """Native constant-span processing (default) or timestamped VST3 events."""
+    @automation_mode.setter
+    def automation_mode(self, value: typing.Literal["sample_steps", "vst3_events"]) -> None: ...
+    @_typing_overload
+    def __call__(
+        self,
+        input_array: NDArray[float32],
+        sample_rate: float | int,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]: ...
+    @_typing_overload
+    def __call__(
+        self,
+        midi_messages: typing.List[MIDIMessageLike],
+        duration: float,
+        sample_rate: float | int,
+        num_channels: int = 2,
+        buffer_size: int = 8192,
+        reset: bool = True,
+        *,
+        automation: dict[str, NDArray[typing.Any]] | None = None,
+    ) -> NDArray[float32]: ...
 
 class _AudioProcessorParameter:
     """

@@ -120,6 +120,11 @@ struct DenseParameterControl {
   std::function<void(float)> setter;
   std::optional<float> lastValue;
   std::string name;
+  std::optional<uint32_t> externalId = std::nullopt;
+  // Dynamic plugin schemas can validate queued targets and resolve a fresh
+  // curve after format preparation. Builtin schemas leave these empty.
+  std::function<void()> validateSchema;
+  std::function<bool(DenseParameterControl &, bool)> resolvePrepared;
 };
 
 using DenseControlPreflight =
@@ -143,10 +148,13 @@ public:
       std::function<void()> prepared = {}, DenseControlProcess bulkProcess = {},
       DenseParameterLatency latency = DenseParameterLatency::Zero,
       bool allowTail = false, DenseControlPreflight commit = {})
-      : PluginContainer({effect}), controls(std::move(controls)),
+      : PluginContainer({}), controls(std::move(controls)),
         preflight(std::move(preflight)), prepared(std::move(prepared)),
         bulkProcess(std::move(bulkProcess)), latency(latency),
         allowTail(allowTail), commit(std::move(commit)) {
+    // This private scheduler also owns MIDI instruments. Public containers
+    // continue rejecting instruments at their own constructor boundary.
+    plugins.push_back(effect);
     lastChannelLayout = layout;
     lastSpec.numChannels = channels;
   }
@@ -155,6 +163,15 @@ public:
     validateOnce();
     applyControls(cursor);
     plugins.front()->prepare(spec);
+    bool changed = false;
+    for (auto &control : controls)
+      if (control.resolvePrepared &&
+          control.resolvePrepared(control, continuation)) {
+        control.lastValue.reset();
+        changed = true;
+      }
+    if (changed)
+      applyControls(cursor);
     if (prepared)
       prepared();
     lastSpec = spec;
@@ -259,6 +276,8 @@ public:
     const size_t frames = controls.front().values.size();
     std::vector<DenseParameterControl> merged;
     for (const auto &previous : old.controls) {
+      if (previous.validateSchema)
+        previous.validateSchema();
       auto found = std::find_if(
           controls.begin(), controls.end(),
           [&](const auto &control) { return previous.name == control.name; });
@@ -272,6 +291,7 @@ public:
       merged.push_back(std::move(control));
     }
     controls = std::move(merged);
+    continuation = true;
   }
   void enableTailHold() { allowTail = true; }
 
@@ -300,7 +320,7 @@ private:
   DenseControlProcess bulkProcess;
   DenseParameterLatency latency;
   bool allowTail;
-  bool validated = false;
+  bool validated = false, continuation = false;
   DenseControlPreflight commit;
 };
 
@@ -333,6 +353,72 @@ inline std::unordered_map<std::type_index, DenseParameterFactory> &
 denseParameterFactories() {
   static std::unordered_map<std::type_index, DenseParameterFactory> factories;
   return factories;
+}
+
+template <typename Effect, typename... Options>
+void bindDenseParameterFactory(py::class_<Effect, Options...> &binding,
+                               DenseParameterFactory factory) {
+  denseParameterFactories()[std::type_index(typeid(Effect))] = factory;
+  auto callback = [factory](std::shared_ptr<Effect> self, py::array input,
+                            double sampleRate, unsigned int bufferSize,
+                            bool reset, py::object automation) {
+    if (automation.is_none())
+      return process(input, sampleRate, {self}, bufferSize, reset);
+    if (!py::isinstance<py::dict>(automation))
+      throw py::type_error("automation must be a dict of NumPy curves.");
+    auto mapping = automation.cast<py::dict>();
+    if (mapping.empty())
+      return process(input, sampleRate, {self}, bufferSize, reset);
+    if (!std::isfinite(sampleRate) || sampleRate <= 0 || bufferSize == 0 ||
+        bufferSize > (unsigned int)std::numeric_limits<int>::max())
+      throw py::value_error("sample_rate and buffer_size must be positive and "
+                            "finite, and buffer_size must fit a native int.");
+
+    py::array_t<float, py::array::c_style> audio;
+    if (input.dtype().char_() == 'f')
+      audio = input;
+    else if (input.dtype().char_() == 'd')
+      audio = input.attr("astype")("float32");
+    else
+      throw py::type_error("Audio must use float32 or float64.");
+    ChannelLayout layout;
+    {
+      std::scoped_lock lock(self->mutex);
+      layout = self->parseAndCacheChannelLayout(audio);
+    }
+    const auto info = audio.request();
+    const size_t frames =
+        info.ndim == 1
+            ? info.shape[0]
+            : info.shape[layout == ChannelLayout::Interleaved ? 0 : 1];
+    const size_t channels =
+        info.ndim == 1
+            ? 1
+            : info.shape[layout == ChannelLayout::Interleaved ? 1 : 0];
+    if (frames > (size_t)std::numeric_limits<int>::max() ||
+        channels > (size_t)std::numeric_limits<int>::max())
+      throw py::value_error("Audio dimensions exceed native buffer capacity.");
+
+    auto adapter =
+        factory(self, mapping, frames, sampleRate, channels, layout, reset);
+    if (!frames || !channels)
+      return process(audio, sampleRate, {}, bufferSize, false);
+    return process(audio, sampleRate, {adapter}, bufferSize, reset);
+  };
+  for (const char *method : {"process", "__call__"})
+    binding.def(
+        method, callback, py::arg("input_array"), py::arg("sample_rate"),
+        py::arg("buffer_size") = DEFAULT_BUFFER_SIZE, py::arg("reset") = true,
+        py::kw_only(), py::arg("automation") = py::none(),
+        R"(Process audio with optional synchronized native parameter automation.
+
+The automation dict maps supported parameter names to one-dimensional real NumPy
+arrays, one target per input frame shared by all channels. Curves validate and
+copy before processing. All changes at a frame apply before its audio is processed.
+The first values initialize reset/prepare; reset=False retains processing memory.
+No extra interpolation or smoothing is added. Final values persist for scalar
+calls. Empty curves with empty audio leave DSP unchanged. Omit automation for
+the existing scalar path; slice audio and curves together to continue a stream.)");
 }
 
 // The specification order defines simultaneous updates, independently of the
@@ -429,67 +515,7 @@ void bindDenseParameters(
         std::move(configuration));
     return adapter;
   };
-  denseParameterFactories()[std::type_index(typeid(Effect))] = factory;
-  auto callback = [factory](std::shared_ptr<Effect> self, py::array input,
-                            double sampleRate, unsigned int bufferSize,
-                            bool reset, py::object automation) {
-    if (automation.is_none())
-      return process(input, sampleRate, {self}, bufferSize, reset);
-    if (!py::isinstance<py::dict>(automation))
-      throw py::type_error("automation must be a dict of NumPy curves.");
-    auto mapping = automation.cast<py::dict>();
-    if (mapping.empty())
-      return process(input, sampleRate, {self}, bufferSize, reset);
-    if (!std::isfinite(sampleRate) || sampleRate <= 0 || bufferSize == 0 ||
-        bufferSize > (unsigned int)std::numeric_limits<int>::max())
-      throw py::value_error("sample_rate and buffer_size must be positive and "
-                            "finite, and buffer_size must fit a native int.");
-
-    py::array_t<float, py::array::c_style> audio;
-    if (input.dtype().char_() == 'f')
-      audio = input;
-    else if (input.dtype().char_() == 'd')
-      audio = input.attr("astype")("float32");
-    else
-      throw py::type_error("Audio must use float32 or float64.");
-    ChannelLayout layout;
-    {
-      std::scoped_lock lock(self->mutex);
-      layout = self->parseAndCacheChannelLayout(audio);
-    }
-    const auto info = audio.request();
-    const size_t frames =
-        info.ndim == 1
-            ? info.shape[0]
-            : info.shape[layout == ChannelLayout::Interleaved ? 0 : 1];
-    const size_t channels =
-        info.ndim == 1
-            ? 1
-            : info.shape[layout == ChannelLayout::Interleaved ? 1 : 0];
-    if (frames > (size_t)std::numeric_limits<int>::max() ||
-        channels > (size_t)std::numeric_limits<int>::max())
-      throw py::value_error("Audio dimensions exceed native buffer capacity.");
-
-    auto adapter =
-        factory(self, mapping, frames, sampleRate, channels, layout, reset);
-    if (!frames || !channels)
-      return process(audio, sampleRate, {}, bufferSize, false);
-    return process(audio, sampleRate, {adapter}, bufferSize, reset);
-  };
-  for (const char *method : {"process", "__call__"})
-    binding.def(
-        method, callback, py::arg("input_array"), py::arg("sample_rate"),
-        py::arg("buffer_size") = DEFAULT_BUFFER_SIZE, py::arg("reset") = true,
-        py::kw_only(), py::arg("automation") = py::none(),
-        R"(Process audio with optional synchronized native parameter automation.
-
-The automation dict maps supported parameter names to one-dimensional real NumPy
-arrays, one target per input frame shared by all channels. Curves validate and
-copy before processing. All changes at a frame apply before its audio is processed.
-The first values initialize reset/prepare; reset=False retains processing memory.
-No extra interpolation or smoothing is added. Final values persist for scalar
-calls. Empty curves with empty audio leave DSP unchanged. Omit automation for
-the existing scalar path; slice audio and curves together to continue a stream.)");
+  bindDenseParameterFactory(binding, std::move(factory));
 }
 
 // Keep the existing one-control bindings as consumers of the same scheduler.
