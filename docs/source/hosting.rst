@@ -116,6 +116,72 @@ Pure array/index/curve failures precede MIDI iteration and reset; MIDI timestamp
 are validated before resetting. Python generators run without the plugin mutex,
 and routing/schema are revalidated afterward. Empty renders do not consume MIDI.
 
+Caller-controlled transport
+---------------------------
+
+Supply a project clock independently of the source audio/MIDI timeline::
+
+    outputs = plugin.process_buses(
+        {0: main_audio}, 48000, output_buses={0: 2},
+        transport={
+            "bpm": 90.0,
+            "sample_position": -48000,
+            "ppq_position": -1.5,
+            "playing": True,
+            "recording": False,
+            "time_signature": (7, 8),
+        },
+    )
+
+``transport=None`` preserves the original no-playhead/default clock. A dictionary
+opts in, with defaults 120 BPM, sample 0, 4/4, playing=True, recording=False and
+looping=False. ``ppq_position`` is quarter notes; if omitted it is derived from
+``sample_position * bpm / (60 * sample_rate)``. Explicit sample and musical anchors
+may have different origins. Positions may be negative for pre-roll. Every call
+supplies its own starting clock: ``reset=False`` preserves plugin history, but
+does not infer the next position when fields are omitted. For successive blocks,
+advance both anchors explicitly. BPM/meter may change between calls; this API does
+not add a tempo map within one call.
+
+The host updates the clock at every actual native processing span, including
+spans created by curves or loops. ``playing=False`` holds project sample/beat
+positions while audio/MIDI still advances through the input. ``recording`` is
+independent metadata; it does not record audio. MIDI timestamps and curve indices
+remain relative to the source call, even when the project position seeks or loops.
+The plugin retains its own native smoothing and interpretation of host timing.
+
+Set ``looping=True`` with both ``loop_start_ppq`` and ``loop_end_ppq`` to wrap the
+project clock in that quarter-note region. Both bounds are also accepted with
+``looping=False`` as inactive metadata. End must exceed start. A playing start
+must precede loop end; pre-roll before loop start is permitted. Stopped clocks
+retain their explicit position. Native spans split at the first sample crossing
+loop end. This wraps clock metadata only: source audio and MIDI are not repeated,
+repositioned or synthesized by the host.
+
+Fractional-sample loop periods preserve continuous musical phase. Project sample
+positions use the nearest integer (half-frame ties toward positive infinity),
+rather than accumulating rounded loop lengths. Matching explicit ``reset=False``
+anchors preserve the fractional phase within the same stream. A seek starts from
+its new anchors. Integer project positions are therefore quantized to at most half
+a frame relative to that continuous phase. Whole and partitioned calls are tested
+across repeated wraps at 44.1/48kHz.
+
+Unknown fields, booleans in numeric fields, non-finite values, nonpositive BPM,
+noninteger sample positions, and invalid meter/loop descriptions are rejected
+before MIDI iteration or reset. Meter uses positive integers with a power-of-two
+denominator. Sample and derived loop positions must fit the exact-double frame
+range (absolute value at most 9007199254740990); clocks must retain sample-resolution
+PPQ and fit the native unsigned 32-bit beat-period representation. Extreme unsafe
+values raise rather than silently overflow.
+
+VST3 receives native process-context timing; explicit negative PPQ/bar positions
+are marked valid. AUv2/AUv3 use persistent host callbacks for tempo, musical context,
+transport and recording. AU transport-change notifications distinguish starts,
+seeks and loop wraps from continuous spans. The prior playhead is restored after
+the call, including exceptions; persistent AU callbacks have instance-owned
+storage and fall back to the original default clock when inactive. This option
+is currently on ``process_buses`` only, not the array/instrument convenience APIs.
+
 Timing and state
 ----------------
 
@@ -180,3 +246,14 @@ An optional unchanged JUCE AudioPluginDemo mixes external audio and a musical
 synthesizer; its VST3 audio matches an independent native host exactly, with/without
 notes and at several partitions. These source examples and selected binaries do
 not certify arbitrary commercial MIDI effects, AU MIDI output or other platforms.
+
+Transport verification reads actual plugin DSP telemetry from VST3, AUv2 and
+out-of-process AUv3: BPM, signed sample position, PPQ, bar/meter, playback/recording,
+loop bounds and AU transport-change flags. An independent VST3 SDK host supplies
+its own context to the same binary as a differential control. Tests cover negative
+pre-roll, stopped clocks, repeated fractional loops, anchored split streams and
+joint MIDI/curves. Optional unchanged Steinberg Sync Delay acceptance verifies
+its actual wet impulse delay against its four-quarter-note formula at 90/120 BPM,
+44.1/48kHz and 31/8192-frame spans. These tests establish host delivery and this
+selected tempo-dependent algorithm, not every vendor's use of the clock. No
+commercial tempo-synced effect or other OS/architecture certification is claimed.

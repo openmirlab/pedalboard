@@ -1,5 +1,6 @@
 /* Actual AUv2 diagnostic DSP, GPL-3.0-only. Apple utility sources retain their
  * license. */
+#include "../hosted_transport_fixture.h"
 #include "AUPlugInDispatch.h"
 #include "MusicDeviceBase.h"
 #include <algorithm>
@@ -21,7 +22,7 @@ int kindOf(AudioComponentInstance instance) {
   const int suffix = description.componentSubType & 255;
   return suffix >= 'a' ? suffix - 'a' + 10 : suffix - '0';
 }
-bool hasBuses(int kind) { return kind >= 9 && kind <= 11; }
+bool hasBuses(int kind) { return kind >= 9 && kind <= 15; }
 bool isInstrument(int kind) { return kind == 2 || (kind >= 6 && kind <= 8); }
 int latency(int kind) {
   return kind == 1 || kind == 6 || kind == 11 ? 20
@@ -184,6 +185,51 @@ public:
   }
   OSStatus Render(AudioUnitRenderActionFlags &flags, const AudioTimeStamp &time,
                   UInt32 frames) override {
+    if (kind >= 12) {
+      TransportObservation observed;
+      observed.rate = GetOutput(0)->GetStreamFormat().mSampleRate;
+      const bool beatOK =
+          CallHostBeatAndTempo(&observed.ppq, &observed.tempo) == noErr;
+      Float32 numerator = 0;
+      UInt32 denominator = 0;
+      const bool meterOK =
+          CallHostMusicalTimeLocation(&observed.nextBeat, &numerator,
+                                      &denominator, &observed.bar) == noErr;
+      observed.numerator = numerator;
+      observed.denominator = denominator;
+      Boolean playing = false, recording = false, cycling = false,
+              changed = false;
+      Float64 frame = 0;
+      OSStatus status;
+      if (mHostCallbackInfo.transportStateProc2)
+        status = mHostCallbackInfo.transportStateProc2(
+            mHostCallbackInfo.hostUserData, &playing, &recording, &changed,
+            &frame, &cycling, &observed.start, &observed.end);
+      else
+        status = CallHostTransportState(&playing, &changed, &frame, &cycling,
+                                        &observed.start, &observed.end);
+      observed.sample = (int64_t)frame;
+      observed.playing = playing;
+      observed.changed = changed;
+      observed.flags =
+          (playing ? 1 : 0) | (recording ? 2 : 0) | (cycling ? 4 : 0) |
+          (beatOK ? 8 + 16 : 0) | (meterOK ? 32 + 128 : 0) |
+          (status == noErr && observed.end > observed.start ? 64 : 0);
+      GetOutput(1)->PrepareBuffer(frames);
+      for (UInt32 i = 0; i < frames; ++i) {
+        const auto values = observed.audio(kind - 12, i);
+        for (int bus = 0; bus < 2; ++bus) {
+          auto &out = GetOutput(bus)->GetBufferList();
+          for (UInt32 c = 0; c < out.mNumberBuffers && c < 2; ++c)
+            static_cast<float *>(out.mBuffers[c].mData)[i] =
+                values[bus * 2 + c];
+        }
+      }
+      notes.clear();
+      controllers.clear();
+      Globals()->SetParameter(blocksId, ++blocks);
+      return noErr;
+    }
     if (hasBuses(kind)) {
       for (int bus = 0; bus < 2; ++bus) {
         const auto status = PullInput(bus, flags, time, frames);

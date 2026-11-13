@@ -2,6 +2,7 @@
  * Reads real IParameterChanges; supports input-clock interpolation or
  * last-point processing, fixed latency and a note-gated instrument.
  * GPL-3.0-only. */
+#include "../hosted_transport_fixture.h"
 #include "pluginterfaces/base/ibstream.h"
 #include "pluginterfaces/base/ipluginbase.h"
 #include "pluginterfaces/base/ustring.h"
@@ -9,6 +10,7 @@
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/vst/ivstevents.h"
 #include "pluginterfaces/vst/ivstparameterchanges.h"
+#include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "pluginterfaces/vst/vstspeaker.h"
 #include <algorithm>
 #include <array>
@@ -22,7 +24,7 @@
 using namespace Steinberg;
 using namespace Steinberg::Vst;
 namespace {
-const std::array<FUID, 12> ids = {
+const std::array<FUID, 16> ids = {
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A001),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A002),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A003),
@@ -34,7 +36,11 @@ const std::array<FUID, 12> ids = {
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A009),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A00A),
     FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A00B),
-    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A00C)};
+    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A00C),
+    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A00D),
+    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A00E),
+    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A00F),
+    FUID(0x49CF8011, 0xE7504992, 0x81784123, 0xFF00A010)};
 const char *names[] = {"Automation Probe",
                        "Automation Probe Last Point",
                        "Automation Probe Delayed",
@@ -46,7 +52,11 @@ const char *names[] = {"Automation Probe",
                        "Automation Probe Huge Delayed Instrument",
                        "Automation Probe Buses",
                        "Automation Probe Audio MIDI",
-                       "Automation Probe Delayed Audio MIDI"};
+                       "Automation Probe Delayed Audio MIDI",
+                       "Automation Probe Clock",
+                       "Automation Probe Meter",
+                       "Automation Probe Loop",
+                       "Automation Probe Position"};
 static_assert(std::size(names) == std::size(ids));
 constexpr ParamID gainId = 0x1001, frequencyId = 0x314159, bypassId = 0xABC,
                   blocksId = 0x998, brokenId = 0x777, misparsedId = 0x999;
@@ -60,7 +70,7 @@ int parameterIndex(ParamID id) {
   return -1;
 }
 
-bool hasBuses(int kind) { return kind >= 9 && kind <= 11; }
+bool hasBuses(int kind) { return kind >= 9 && kind <= 15; }
 
 bool isInstrument(int kind) { return kind == 3 || (kind >= 6 && kind <= 8); }
 int latency(int kind) {
@@ -314,6 +324,41 @@ public:
               ? 2 * dsp[0]
               : std::pow(10.0, normalizedParamToPlain(gainId, dsp[0]) / 20.0);
       const double frequency = normalizedParamToPlain(frequencyId, dsp[1]);
+      if (kind >= 12) {
+        const auto *time = data.processContext;
+        std::array<float, 4> values{-1, -1, -1, -1};
+        if (time) {
+          TransportObservation observed;
+          observed.playing = time->state & ProcessContext::kPlaying;
+          observed.tempo = time->tempo;
+          observed.ppq = time->projectTimeMusic;
+          observed.sample = time->projectTimeSamples;
+          observed.rate = time->sampleRate;
+          observed.bar = time->barPositionMusic;
+          observed.numerator = time->timeSigNumerator;
+          observed.denominator = time->timeSigDenominator;
+          observed.start = time->cycleStartMusic;
+          observed.end = time->cycleEndMusic;
+          observed.flags =
+              (observed.playing ? 1 : 0) |
+              ((time->state & ProcessContext::kRecording) ? 2 : 0) |
+              ((time->state & ProcessContext::kCycleActive) ? 4 : 0) |
+              ((time->state & ProcessContext::kTempoValid) ? 8 : 0) |
+              ((time->state & ProcessContext::kProjectTimeMusicValid) ? 16
+                                                                      : 0) |
+              ((time->state & ProcessContext::kBarPositionValid) ? 32 : 0) |
+              ((time->state & ProcessContext::kCycleValid) ? 64 : 0) |
+              ((time->state & ProcessContext::kTimeSigValid) ? 128 : 0);
+          observed.nextBeat = (uint32_t)std::ceil(
+              (std::ceil(time->projectTimeMusic) - time->projectTimeMusic) *
+              60 * time->sampleRate / time->tempo);
+          values = observed.audio(kind - 12, i);
+        }
+        for (int bus = 0; bus < data.numOutputs && bus < 2; ++bus)
+          for (int c = 0; c < data.outputs[bus].numChannels && c < 2; ++c)
+            data.outputs[bus].channelBuffers32[c][i] = values[bus * 2 + c];
+        continue;
+      }
       if (hasBuses(kind)) {
         const float key = data.numInputs > 1 && data.inputs[1].numChannels
                               ? data.inputs[1].channelBuffers32[0][i]

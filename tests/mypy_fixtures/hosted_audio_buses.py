@@ -26,3 +26,20 @@ for message, seconds in returned_notes:
     assert isinstance(message, bytes)
     assert isinstance(seconds, float)
 input_declared = plugin.midi_capabilities["accepts_input"]
+
+clocked = plugin.process_buses(
+    {0: main},
+    48000,
+    output_buses={0: 2},
+    transport={
+        "bpm": 90.0,
+        "sample_position": -100,
+        "ppq_position": -1.0,
+        "playing": True,
+        "recording": False,
+        "time_signature": (7, 8),
+        "looping": True,
+        "loop_start_ppq": 0.0,
+        "loop_end_ppq": 4.0,
+    },
+)

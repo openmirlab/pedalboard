@@ -35,6 +35,18 @@ from numpy.typing import NDArray
 
 _Shape = typing.Tuple[int, ...]
 
+
+class _HostedTransport(typing.TypedDict, total=False):
+    bpm: float
+    sample_position: int
+    ppq_position: float
+    playing: bool
+    recording: bool
+    time_signature: typing.Tuple[int, int] | typing.List[int]
+    looping: bool
+    loop_start_ppq: float
+    loop_end_ppq: float
+
 __all__ = [
     "AudioUnitPlugin",
     "BrickwallLimiter",
@@ -1571,6 +1583,7 @@ class AudioUnitPlugin(ExternalPlugin):
         midi_messages: typing.Iterable[MIDIMessageLike] | None = None,
         automation: typing.Dict[str, NDArray] | None = None,
         return_midi: typing.Literal[False] = False,
+        transport: _HostedTransport | None = None,
     ) -> typing.Dict[int, NDArray[float32]]: ...
 
     @_typing_overload
@@ -1586,6 +1599,7 @@ class AudioUnitPlugin(ExternalPlugin):
         midi_messages: typing.Iterable[MIDIMessageLike] | None = None,
         automation: typing.Dict[str, NDArray] | None = None,
         return_midi: typing.Literal[True],
+        transport: _HostedTransport | None = None,
     ) -> typing.Tuple[typing.Dict[int, NDArray[float32]], typing.List[typing.Tuple[bytes, float]]]: ...
 
     @_typing_overload
@@ -1601,6 +1615,7 @@ class AudioUnitPlugin(ExternalPlugin):
         midi_messages: typing.Iterable[MIDIMessageLike] | None = None,
         automation: typing.Dict[str, NDArray] | None = None,
         return_midi: bool = False,
+        transport: _HostedTransport | None = None,
     ) -> typing.Union[typing.Dict[int, NDArray[float32]], typing.Tuple[typing.Dict[int, NDArray[float32]], typing.List[typing.Tuple[bytes, float]]]]: ...
 
     def _configuration_snapshot(self, include_state: bool = True) -> typing.Dict[str, typing.Any]: ...
@@ -2411,6 +2426,7 @@ class VST3Plugin(ExternalPlugin):
         midi_messages: typing.Iterable[MIDIMessageLike] | None = None,
         automation: typing.Dict[str, NDArray] | None = None,
         return_midi: typing.Literal[False] = False,
+        transport: _HostedTransport | None = None,
     ) -> typing.Dict[int, NDArray[float32]]: ...
 
     @_typing_overload
@@ -2426,6 +2442,7 @@ class VST3Plugin(ExternalPlugin):
         midi_messages: typing.Iterable[MIDIMessageLike] | None = None,
         automation: typing.Dict[str, NDArray] | None = None,
         return_midi: typing.Literal[True],
+        transport: _HostedTransport | None = None,
     ) -> typing.Tuple[typing.Dict[int, NDArray[float32]], typing.List[typing.Tuple[bytes, float]]]: ...
 
     @_typing_overload
@@ -2441,6 +2458,7 @@ class VST3Plugin(ExternalPlugin):
         midi_messages: typing.Iterable[MIDIMessageLike] | None = None,
         automation: typing.Dict[str, NDArray] | None = None,
         return_midi: bool = False,
+        transport: _HostedTransport | None = None,
     ) -> typing.Union[typing.Dict[int, NDArray[float32]], typing.Tuple[typing.Dict[int, NDArray[float32]], typing.List[typing.Tuple[bytes, float]]]]: ...
 
     def _configuration_snapshot(self, include_state: bool = True) -> typing.Dict[str, typing.Any]: ...

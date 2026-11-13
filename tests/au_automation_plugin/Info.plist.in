@@ -175,6 +175,42 @@
             <key>type</key><string>aumf</string>
             <key>version</key><integer>65536</integer>
         </dict>
+        <dict>
+            <key>description</key><string>Automation AU Clock</string>
+            <key>factoryFunction</key><string>AutomationAUFactory</string>
+            <key>manufacturer</key><string>OMrl</string>
+            <key>name</key><string>OpenMIRLab: Automation AU Clock</string>
+            <key>subtype</key><string>AuPc</string>
+            <key>type</key><string>aumf</string>
+            <key>version</key><integer>65536</integer>
+        </dict>
+        <dict>
+            <key>description</key><string>Automation AU Meter</string>
+            <key>factoryFunction</key><string>AutomationAUFactory</string>
+            <key>manufacturer</key><string>OMrl</string>
+            <key>name</key><string>OpenMIRLab: Automation AU Meter</string>
+            <key>subtype</key><string>AuPd</string>
+            <key>type</key><string>aumf</string>
+            <key>version</key><integer>65536</integer>
+        </dict>
+        <dict>
+            <key>description</key><string>Automation AU Loop</string>
+            <key>factoryFunction</key><string>AutomationAUFactory</string>
+            <key>manufacturer</key><string>OMrl</string>
+            <key>name</key><string>OpenMIRLab: Automation AU Loop</string>
+            <key>subtype</key><string>AuPe</string>
+            <key>type</key><string>aumf</string>
+            <key>version</key><integer>65536</integer>
+        </dict>
+        <dict>
+            <key>description</key><string>Automation AU Position</string>
+            <key>factoryFunction</key><string>AutomationAUFactory</string>
+            <key>manufacturer</key><string>OMrl</string>
+            <key>name</key><string>OpenMIRLab: Automation AU Position</string>
+            <key>subtype</key><string>AuPf</string>
+            <key>type</key><string>aumf</string>
+            <key>version</key><integer>65536</integer>
+        </dict>
 	</array>
 	<key>CFBundleExecutable</key>
 	<string>AutomationAU</string>
