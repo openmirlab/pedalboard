@@ -636,9 +636,9 @@ values are snapped only within floating-point rounding error before integer-fram
 conversion. Genuine fractional-frame positions retain the existing truncation rule.
 
 Standalone VST3 reset and audio/MIDI rendering share the instance lock. This does
-not remove a third-party plugin's own main-thread requirements. Scalar paths remain
-unchanged except the corrected MIDI timestamp precision/locking and validation of
-unsafe MIDI sizes. Standalone MIDI clips can opt into fixed reported-latency
+not remove a third-party plugin's own main-thread requirements. Scalar and automated
+calls validate native MIDI sizes and retain sample-aligned timestamp precision.
+Standalone MIDI clips can opt into fixed reported-latency
 compensation with ``compensate_latency=True`` and ``reset=True``; raw MIDI timing
 remains the default. See :doc:`../instrument_latency`. Native AU events, transport
 and bus hosting remain separate.
