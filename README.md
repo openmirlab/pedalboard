@@ -1,7 +1,7 @@
 # Pedalboard — OpenMIRLab fork
 
 This fork adds native, per-frame NumPy parameter automation to selected built-in
-Pedalboard effects. It is maintained by [OpenMIRLab](https://github.com/openmirlab)
+Pedalboard effects, VST3 plugins and macOS Audio Units. It is maintained by [OpenMIRLab](https://github.com/openmirlab)
 and builds on [Spotify's Pedalboard](https://github.com/spotify/pedalboard).
 The existing DSP algorithms and scalar processing API are retained.
 
@@ -96,8 +96,8 @@ output = Resample()(audio, sample_rate, automation={"target_sample_rate": rate_c
 
 See the [automation reference](docs/source/reference/pedalboard.rst) for accepted
 values, layouts, reset behavior and effect-specific limits. This interface targets
-supported built-ins and their `Pedalboard`/`Chain`/`Mix` graphs. External-plugin
-parameter automation is not included.
+supported built-ins, VST3/Audio Unit plugins and their `Pedalboard`/`Chain`/`Mix` graphs.
+VST3 parameter curves use display units as described below.
 
 ### Automate an effect chain
 
@@ -129,9 +129,110 @@ rate and channel count. To change them, restart with `reset=True`, or explicitly
 reset the root and start a new `reset=False` stream. Set scalar defaults before
 starting the session; use curves to change active lanes. Do not independently
 render/reset participating child nodes or nested containers during a root session.
-Unsupported effects can remain in the graph with scalar settings; only the 21
-listed built-ins can receive curves. Omit automation on a graph without an active
-session for its original scalar processing path.
+Other effects can remain in the graph with scalar settings. The 21 listed
+built-ins and supported VST3/Audio Unit parameters can receive curves. Omit automation
+on a graph without an active session for its original scalar processing path.
+
+### VST3 automation in display units
+
+VST3 curves use the same displayed values as scalar parameter attributes: dB,
+Hz, percentages, numeric choices or booleans, rather than normalized 0–1 values.
+Names come from `plugin.parameters`; not every plugin appends its units to a name.
+For example, CHOWTapeModel names its gain `input_gain` and its Hz cutoff
+`input_low_cut`:
+
+```python
+from pedalboard import VST3Plugin
+
+vst = VST3Plugin("CHOWTapeModel.vst3")  # Supply your installed plugin's path.
+output = vst(audio, sample_rate, automation={
+    "input_gain": np.linspace(-12, 6, audio.size, dtype=np.float32),
+    "input_low_cut": np.geomspace(100, 1000, audio.size).astype(np.float32),
+})
+```
+
+The default `vst.automation_mode = "sample_steps"` processes synchronized constant
+spans in C++. It also works with plugins that only read the last parameter value
+in a block. Dense changing curves may require one native process call per frame;
+Python is not called per frame. For plugins known to consume intra-block offsets,
+set `vst.automation_mode = "vst3_events"` **before** starting the stream to send
+sample-positioned points in larger blocks. This can be faster, but plugins that
+ignore offsets will respond differently. A mode change requires a root/plugin reset.
+Both modes retain the plugin's own smoothing and block-dependent behavior.
+
+Use `automation={vst: {...}}` in a graph, including alongside builtin curves.
+MIDI instruments accept the same keyword on their existing render entry point:
+`vst(midi_messages, duration=seconds, sample_rate=rate, automation={...})`.
+Instrument curves have one value per returned frame, on the same input clock as
+MIDI. Instrument output-latency compensation is separate and unchanged.
+
+Display-unit conversion validates and copies the entire curve against the current
+controller model before DSP changes. It checks that model again after preparation
+and reconverts targets when the plugin changes its range with the audio format.
+It uses the plugin's SDK conversion model when it agrees with display units,
+otherwise its display parser, with round-trip checks at display precision. There
+is no range-guessing or approximate lookup-table fallback. Numeric displays and
+recognized two-state booleans are supported; read-only/program parameters,
+ambiguous names/units, text-only choices and unreliable conversions raise errors.
+Hz/kHz displays are converted to Hz when no unit label is reported. Literal infinite
+endpoints, such as a displayed `-inf` gain, map to their normalized endpoint.
+Normalized processing precision remains float32, matching the existing scalar host.
+If a target lies outside the load-time range but inside the desired format's range,
+call `vst.prepare_automation(sample_rate, num_channels=2)` first, then render with
+`reset=False`. Preparation resets processing state. Post-preparation conversion
+errors stop rendering but do not undo preparation; correct the curves and restart.
+An active graph stream requires stable unit mappings until the root is reset.
+
+For streaming, explicitly reset the root/plugin first and use `reset=False` on
+matching slices. Starting curves after warm scalar processing also requires a
+reset. Do not change plugin state/presets or process participating children
+independently during an active graph session. AU automation, buses, transport and
+warm-state cloning are separate capabilities.
+
+### Audio Unit automation on macOS
+
+`AudioUnitPlugin` accepts the same display-unit `automation` mapping for audio and
+MIDI instruments, including instance-keyed curves in `Pedalboard`/`Chain`/`Mix`:
+
+```python
+from pedalboard import AudioUnitPlugin
+
+au = AudioUnitPlugin("/Library/Audio/Plug-Ins/Components/CHOWTapeModel.component")
+output = au(audio, sample_rate, automation={
+    "input_gain": np.linspace(-12, 6, audio.size, dtype=np.float32),
+    "input_low_cut": np.geomspace(100, 1000, audio.size),
+})
+```
+
+Audio Units currently use `automation_mode = "sample_steps"` only. Equal targets
+are coalesced and changing spans are dispatched in C++; no per-frame Python calls.
+AU native scheduled events are not exposed. Plugin smoothing and block-dependent
+behavior remain. Global writable, real-time parameters with reliable numeric or
+boolean conversions are supported; read-only/non-real-time parameters and text-only
+choices are rejected. Conversions use native AU metadata or the native display
+parser with round-trip checks; AU's physical float32 quantization is retained.
+Parameters naming only special endpoints (such as `-inf`) also use their documented
+metadata values when the actual display confirms that conversion.
+This avoids the legacy Python scalar wrapper's inferred/rounded parameter ranges.
+The audio/MIDI streaming, reset, stable-unit-model and `prepare_automation` rules
+above also apply to AU. Actual AUv2 plugins and an original, ad-hoc-signed AUv3
+extension are tested on macOS arm64. The AUv3 checks load the real `.appex`
+out-of-process and cover dB/Hz/boolean curves, MIDI, delay, graph streams and
+reset/reinstantiation. A 64-bit AU parameter address is exercised alongside a
+separate parameter with the same low32 bits through Apple's AU bridge.
+
+An AUv3's containing application must be registered with macOS before its `.appex`
+can be discovered. Relative paths, encoded spaces/Unicode, symlinks and multiple
+components in one extension are supported by the scanner. The AUv3 test fixture
+temporarily registers only its generated build and removes those entries afterward.
+Manual macOS arm64 acceptance also covers an unchanged source build of
+[Morass v1.0.3](https://github.com/bogware/morass/tree/v1.0.3): dB/Hz/boolean
+curves, scalar-reference audio, streaming and parameter-state checks. Its published
+macOS installer contains AUv2/VST3, so this does not verify a vendor-distributed
+AUv3 binary. Morass AUv3 and CHOWTapeModel AUv2 editors were visually checked for
+parameter-to-UI updates, automation while open and reopening after reset.
+Direct GUI-control-to-host updates remain unverified. Other AUv3 vendors and
+architectures are not covered; this is not universal plugin compatibility.
 
 ## Install the OpenMIRLab source
 

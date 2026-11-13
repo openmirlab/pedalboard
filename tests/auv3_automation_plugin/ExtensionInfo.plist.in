@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>AutomationAUv3</string>
+	<key>CFBundleIdentifier</key>
+	<string>org.openmirlab.pedalboard.auv3probe.@PROBE_ID@.extension</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>AutomationAUv3</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>MacOSX</string>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<key>AudioComponents</key>
+			<array>
+				<dict>
+					<key>description</key>
+					<string>AUv3 Automation Probe</string>
+					<key>manufacturer</key>
+					<string>OMrl</string>
+					<key>name</key>
+					<string>OpenMIRLab: AUv3 Automation Probe</string>
+					<key>sandboxSafe</key>
+					<true/>
+					<key>subtype</key>
+					<string>@PROBE_PREFIX@0</string>
+					<key>tags</key>
+					<array>
+						<string>Effects</string>
+					</array>
+					<key>type</key>
+					<string>aufx</string>
+					<key>version</key>
+					<integer>65536</integer>
+				</dict>
+				<dict>
+					<key>description</key>
+					<string>AUv3 Automation Delayed</string>
+					<key>manufacturer</key>
+					<string>OMrl</string>
+					<key>name</key>
+					<string>OpenMIRLab: AUv3 Automation Delayed</string>
+					<key>sandboxSafe</key>
+					<true/>
+					<key>subtype</key>
+					<string>@PROBE_PREFIX@1</string>
+					<key>tags</key>
+					<array>
+						<string>Effects</string>
+					</array>
+					<key>type</key>
+					<string>aufx</string>
+					<key>version</key>
+					<integer>65536</integer>
+				</dict>
+				<dict>
+					<key>description</key>
+					<string>AUv3 Automation Instrument</string>
+					<key>manufacturer</key>
+					<string>OMrl</string>
+					<key>name</key>
+					<string>OpenMIRLab: AUv3 Automation Instrument</string>
+					<key>sandboxSafe</key>
+					<true/>
+					<key>subtype</key>
+					<string>@PROBE_PREFIX@2</string>
+					<key>tags</key>
+					<array>
+						<string>Synthesizer</string>
+					</array>
+					<key>type</key>
+					<string>aumu</string>
+					<key>version</key>
+					<integer>65536</integer>
+				</dict>
+			</array>
+		</dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.AudioUnit</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>OMAutomationFactory</string>
+	</dict>
+</dict>
+</plist>

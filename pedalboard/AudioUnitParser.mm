@@ -18,8 +18,8 @@
 #include "AudioUnitParser.h"
 
 #if JUCE_MAC
-#include <AudioToolbox/AudioUnitUtilities.h>
 #include <AVFoundation/AVFAudio.h>
+#include <AudioToolbox/AudioUnitUtilities.h>
 
 namespace Pedalboard {
 
@@ -84,16 +84,25 @@ getAudioUnitIdentifiersFromFile(const juce::String &filename) {
   }
 
   if (file.hasFileExtension(".appex")) {
-    AVAudioUnitComponentManager *manager = [AVAudioUnitComponentManager sharedAudioUnitComponentManager];
+    AVAudioUnitComponentManager *manager =
+        [AVAudioUnitComponentManager sharedAudioUnitComponentManager];
     AudioComponentDescription desc = {0};
     NSArray *audioComponents = [manager componentsMatchingDescription:desc];
-    NSString *filePathWithoutTrailingSlash = (NSString *)(filename.trimCharactersAtEnd("/") + "/").toCFString();
-
+    // Compare decoded canonical filesystem paths, not URL strings. A URL
+    // percent-encodes spaces/Unicode and callers may use relative/symlink
+    // paths.
+    NSString *requestedPath =
+        [[NSString stringWithUTF8String:file.getFullPathName().toRawUTF8()]
+            stringByResolvingSymlinksInPath];
+    requestedPath = [requestedPath stringByStandardizingPath];
     for (AVAudioUnitComponent *component in audioComponents) {
-      if ([component.componentURL.absoluteString hasSuffix:filePathWithoutTrailingSlash]) {
-        identifiers.push_back(createPluginIdentifier(component.audioComponentDescription).toStdString());
-        break;
-      }
+      NSString *componentPath =
+          [[component.componentURL.path stringByResolvingSymlinksInPath]
+              stringByStandardizingPath];
+      if ([componentPath isEqualToString:requestedPath])
+        identifiers.push_back(
+            createPluginIdentifier(component.audioComponentDescription)
+                .toStdString());
     }
   } else {
     // Use NSBundle to open and extract identifiers:
@@ -119,5 +128,5 @@ getAudioUnitIdentifiersFromFile(const juce::String &filename) {
   return identifiers;
 }
 
-}
+} // namespace Pedalboard
 #endif

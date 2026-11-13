@@ -1907,64 +1907,98 @@ struct VST3ComponentHolder {
 };
 
 //==============================================================================
-/*  A queue which can store up to one element.
-
-    This is more memory-efficient than storing large vectors of
-    parameter changes that we'll just throw away.
-*/
+/* Scalar updates remain inline; automation adds ordered timestamped points.
+   Extra storage survives clear(), so repeated processing blocks reuse capacity.
+ */
 class ParamValueQueue : public Vst::IParamValueQueue {
 public:
   ParamValueQueue(Vst::ParamID idIn, Steinberg::int32 parameterIndexIn)
       : paramId(idIn), parameterIndex(parameterIndexIn) {}
-
   virtual ~ParamValueQueue() = default;
-
   JUCE_DECLARE_VST3_COM_REF_METHODS
   JUCE_DECLARE_VST3_COM_QUERY_METHODS
-
   Vst::ParamID PLUGIN_API getParameterId() override { return paramId; }
-
   Steinberg::int32 getParameterIndex() const noexcept { return parameterIndex; }
-
-  Steinberg::int32 PLUGIN_API getPointCount() override { return size; }
-
-  tresult PLUGIN_API getPoint(Steinberg::int32 index,
-                              Steinberg::int32 &sampleOffset,
+  Steinberg::int32 PLUGIN_API getPointCount() override {
+    return empty ? 0 : (Steinberg::int32)extra.size() + 1;
+  }
+  tresult PLUGIN_API getPoint(Steinberg::int32 index, Steinberg::int32 &offset,
                               Vst::ParamValue &value) override {
-    if (!isPositiveAndBelow(index, size))
+    if (index < 0 || index >= getPointCount())
       return kResultFalse;
-
-    sampleOffset = 0;
-    value = cachedValue;
-
+    const auto &point = index == 0 ? first : extra[(size_t)index - 1];
+    offset = point.offset;
+    value = point.value;
     return kResultTrue;
   }
-
-  tresult PLUGIN_API addPoint(Steinberg::int32, Vst::ParamValue value,
+  tresult PLUGIN_API addPoint(Steinberg::int32 offset, Vst::ParamValue value,
                               Steinberg::int32 &index) override {
-    index = size++;
-    set((float)value);
-
+    if (offset < 0) {
+      index = -1;
+      return kInvalidArgument;
+    }
+    if (empty) {
+      first = {offset, value};
+      empty = false;
+      index = 0;
+      return kResultTrue;
+    }
+    if (offset == first.offset) {
+      first.value = value;
+      index = 0;
+      return kResultTrue;
+    }
+    if (offset < first.offset) {
+      extra.insert(extra.begin(), first);
+      first = {offset, value};
+      index = 0;
+      return kResultTrue;
+    }
+    if (extra.empty() || offset > extra.back().offset) {
+      extra.push_back({offset, value});
+      index = (Steinberg::int32)extra.size();
+      return kResultTrue;
+    }
+    auto found =
+        std::lower_bound(extra.begin(), extra.end(), offset,
+                         [](const Point &point, Steinberg::int32 time) {
+                           return point.offset < time;
+                         });
+    index = (Steinberg::int32)(found - extra.begin()) + 1;
+    if (found != extra.end() && found->offset == offset)
+      found->value = value;
+    else
+      extra.insert(found, {offset, value});
     return kResultTrue;
   }
-
-  void set(float valueIn) {
-    cachedValue = valueIn;
-    size = 1;
+  void set(float value) {
+    first = {0, value};
+    extra.clear();
+    empty = false;
   }
-
-  void clear() { size = 0; }
-
+  void clear() {
+    extra.clear();
+    empty = true;
+  }
+  void reserve(int frames) {
+    if (frames > 1)
+      extra.reserve((size_t)frames - 1);
+  }
   float get() const noexcept {
-    jassert(size > 0);
-    return cachedValue;
+    jassert(!empty);
+    return (float)(extra.empty() ? first.value : extra.back().value);
   }
 
 private:
+  struct Point {
+    Steinberg::int32 offset;
+    Vst::ParamValue value;
+  };
   const Vst::ParamID paramId;
   const Steinberg::int32 parameterIndex;
-  float cachedValue;
-  Steinberg::int32 size = 0;
+  Point first{0, 0};
+  std::vector<Point> extra;
+  bool empty = true;
   Atomic<int> refCount;
 };
 
@@ -2037,13 +2071,24 @@ public:
   }
 
   void clear() {
-    for (auto *item : queues)
+    for (auto *item : queues) {
+      item->ptr->clear();
       item->index = notInVector;
+    }
 
     queues.clear();
   }
 
+  void reserve(Vst::ParamID id, int frames) {
+    const auto found = map.find(id);
+    if (found == map.end())
+      throw std::invalid_argument("Unknown VST3 parameter ID");
+    found->second.ptr->reserve(frames);
+  }
+
   void initialise(const std::vector<Vst::ParamID> &idsIn) {
+    queues.clear();
+    map.clear();
     Steinberg::int32 index = 0;
 
     for (const auto &id : idsIn)
@@ -2162,6 +2207,7 @@ public:
     String getParameterID() const override { return String(paramID); }
 
     Steinberg::Vst::ParamID getParamID() const noexcept { return paramID; }
+    int getAutomationIndex() const noexcept { return vstParamIndex; }
 
   private:
     Vst::ParameterInfo getParameterInfo() const {
@@ -2180,6 +2226,77 @@ public:
                             : stepCount + 1;
     }();
   };
+
+  VST3Parameter &automationParameter(uint32_t id) {
+    if (auto *parameter = getParameterForID(id))
+      return *parameter;
+    throw std::invalid_argument(
+        "VST3 automation parameter is no longer available");
+  }
+  PatchedVST3AutomationParameter describeAutomation(int index) {
+    if (index < 0 || index >= getParameters().size())
+      throw std::invalid_argument("Invalid VST3 parameter index");
+    auto *parameter = dynamic_cast<VST3Parameter *>(getParameters()[index]);
+    if (!parameter)
+      throw std::invalid_argument(
+          "Synthetic MIDI parameters cannot receive VST3 automation");
+    Vst::ParameterInfo info{};
+    if (editController->getParameterInfo(parameter->getAutomationIndex(),
+                                         info) != kResultOk ||
+        info.id != parameter->getParamID())
+      throw std::invalid_argument("VST3 parameter metadata is unavailable");
+    const bool canAutomate =
+        (info.flags & Vst::ParameterInfo::kCanAutomate) &&
+        !(info.flags & (Vst::ParameterInfo::kIsReadOnly |
+                        Vst::ParameterInfo::kIsProgramChange));
+    return {info.id,
+            toString(info.title),
+            toString(info.units),
+            info.stepCount,
+            canAutomate,
+            (info.flags & Vst::ParameterInfo::kIsBypass) != 0};
+  }
+  String automationText(uint32_t id, double value) {
+    Vst::String128 result{};
+    if (editController->getParamStringByValue(id, value, result) != kResultOk)
+      throw std::invalid_argument(
+          "VST3 parameter does not provide display text");
+    return toString(result);
+  }
+  double automationFromText(uint32_t id, const String &text) {
+    Vst::ParamValue value = 0;
+    if (editController->getParamValueByString(id, toString(text), value) !=
+        kResultOk)
+      throw std::invalid_argument(
+          "VST3 parameter cannot parse display-unit values");
+    return value;
+  }
+  double automationPlain(uint32_t id, double value) {
+    return editController->normalizedParamToPlain(id, value);
+  }
+  double automationNormalized(uint32_t id, double value) {
+    return editController->plainParamToNormalized(id, value);
+  }
+  void reserveAutomation(const std::vector<uint32_t> &ids, int frames) {
+    for (auto id : ids) {
+      automationParameter(id);
+      inputParameterChanges->reserve(id, frames);
+    }
+  }
+  void
+  processAutomation(AudioBuffer<float> &buffer, MidiBuffer &midi,
+                    const std::vector<PatchedVST3AutomationCurve> &curves) {
+    const SpinLock::ScopedLockType processLock(processMutex);
+    if (!isActive || processor == nullptr)
+      throw std::runtime_error("VST3 processor is not prepared");
+    processAudio(buffer, midi, Vst::kSample32, false, &curves);
+    for (const auto &curve : curves) {
+      auto &parameter = automationParameter(curve.id);
+      const float value = curve.values[buffer.getNumSamples() - 1];
+      parameter.setValueWithoutUpdatingProcessor(value);
+      parameterDispatcher.push(parameter.getAutomationIndex(), value);
+    }
+  }
 
   //==============================================================================
   PatchedVST3PluginInstance(VST3ComponentHolder *componentHolder)
@@ -2528,9 +2645,10 @@ public:
 
   //==============================================================================
   template <typename FloatType>
-  void processAudio(AudioBuffer<FloatType> &buffer, MidiBuffer &midiMessages,
-                    Vst::SymbolicSampleSizes sampleSize,
-                    bool isProcessBlockBypassedCall) {
+  void processAudio(
+      AudioBuffer<FloatType> &buffer, MidiBuffer &midiMessages,
+      Vst::SymbolicSampleSizes sampleSize, bool isProcessBlockBypassedCall,
+      const std::vector<PatchedVST3AutomationCurve> *automation = nullptr) {
     using namespace Vst;
     auto numSamples = buffer.getNumSamples();
 
@@ -2563,6 +2681,29 @@ public:
       inputParameterChanges->set(cachedParamValues.getParamID(index), value);
     });
 
+    if (automation) {
+      for (const auto &curve : *automation) {
+        Steinberg::int32 index = 0;
+        auto *queue = inputParameterChanges->addParameterData(curve.id, index);
+        if (!queue)
+          throw std::invalid_argument("Unknown VST3 automation parameter ID");
+        queue->clear();
+        if (numSamples > 0) {
+          queue->addPoint(0, curve.values[0], index);
+          int lastPoint = 0;
+          for (int frame = 1; frame < numSamples; ++frame) {
+            if (curve.values[frame] == curve.values[frame - 1])
+              continue;
+            // VST3 interpolates between points: retain the old value just
+            // before a jump, rather than turning a constant run into a ramp.
+            if (lastPoint != frame - 1)
+              queue->addPoint(frame - 1, curve.values[frame - 1], index);
+            queue->addPoint(frame, curve.values[frame], index);
+            lastPoint = frame;
+          }
+        }
+      }
+    }
     processor->process(data);
 
     outputParameterChanges->forEach([&](Steinberg::int32 index, float value) {
@@ -3446,6 +3587,56 @@ private:
 
   JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(PatchedVST3PluginInstance)
 };
+
+namespace {
+PatchedVST3PluginInstance &automationInstance(AudioPluginInstance &instance) {
+  auto *vst = dynamic_cast<PatchedVST3PluginInstance *>(&instance);
+  if (!vst)
+    throw std::invalid_argument(
+        "Native automation requires the patched VST3 host");
+  return *vst;
+}
+} // namespace
+PatchedVST3AutomationParameter
+describePatchedVST3Parameter(AudioPluginInstance &instance, int index) {
+  return automationInstance(instance).describeAutomation(index);
+}
+PatchedVST3AutomationParameter
+describePatchedVST3ParameterById(AudioPluginInstance &instance, uint32_t id) {
+  auto &vst = automationInstance(instance);
+  return vst.describeAutomation(
+      vst.automationParameter(id).getParameterIndex());
+}
+String getPatchedVST3ParameterText(AudioPluginInstance &instance, uint32_t id,
+                                   double value) {
+  return automationInstance(instance).automationText(id, value);
+}
+double getPatchedVST3ParameterFromText(AudioPluginInstance &instance,
+                                       uint32_t id, const String &text) {
+  return automationInstance(instance).automationFromText(id, text);
+}
+double getPatchedVST3ParameterPlain(AudioPluginInstance &instance, uint32_t id,
+                                    double value) {
+  return automationInstance(instance).automationPlain(id, value);
+}
+double getPatchedVST3ParameterNormalized(AudioPluginInstance &instance,
+                                         uint32_t id, double value) {
+  return automationInstance(instance).automationNormalized(id, value);
+}
+void setPatchedVST3Parameter(AudioPluginInstance &instance, uint32_t id,
+                             float value) {
+  automationInstance(instance).automationParameter(id).setValue(value);
+}
+void reservePatchedVST3Automation(AudioPluginInstance &instance,
+                                  const std::vector<uint32_t> &ids,
+                                  int frames) {
+  automationInstance(instance).reserveAutomation(ids, frames);
+}
+void processPatchedVST3Automation(
+    AudioPluginInstance &instance, AudioBuffer<float> &buffer, MidiBuffer &midi,
+    const std::vector<PatchedVST3AutomationCurve> &curves) {
+  automationInstance(instance).processAutomation(buffer, midi, curves);
+}
 
 JUCE_END_IGNORE_WARNINGS_MSVC
 

@@ -729,6 +729,9 @@ class _PythonExternalPluginMixin:
         return getattr(super(), name)
 
     def __setattr__(self, name: str, value):
+        if name == "automation_mode" and hasattr(type(self), "automation_mode"):
+            super().__setattr__(name, value)
+            return
         if not name.startswith("__"):
             parameter = self._get_parameter_by_python_name(name)
             if parameter:
