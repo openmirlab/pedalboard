@@ -394,9 +394,12 @@ static void toProcessContext(Vst::ProcessContext &context,
 
     context.frameRate.framesPerSecond =
         (Steinberg::uint32)position.frameRate.getBaseRate();
-    context.frameRate.flags = (Steinberg::uint32)(
-        (position.frameRate.isDrop() ? FrameRate::kDropRate : 0) |
-        (position.frameRate.isPullDown() ? FrameRate::kPullDownRate : 0));
+    context.frameRate.flags =
+        (Steinberg::uint32)((position.frameRate.isDrop() ? FrameRate::kDropRate
+                                                         : 0) |
+                            (position.frameRate.isPullDown()
+                                 ? FrameRate::kPullDownRate
+                                 : 0));
 
     if (position.isPlaying)
       context.state |= ProcessContext::kPlaying;
@@ -412,16 +415,17 @@ static void toProcessContext(Vst::ProcessContext &context,
     fr.flags = 0;
   }
 
-  if (context.projectTimeMusic >= 0.0)
+  if (playHead != nullptr || context.projectTimeMusic >= 0.0)
     context.state |= ProcessContext::kProjectTimeMusicValid;
-  if (context.barPositionMusic >= 0.0)
+  if (playHead != nullptr || context.barPositionMusic >= 0.0)
     context.state |= ProcessContext::kBarPositionValid;
   if (context.tempo > 0.0)
     context.state |= ProcessContext::kTempoValid;
   if (context.frameRate.framesPerSecond > 0)
     context.state |= ProcessContext::kSmpteValid;
 
-  if (context.cycleStartMusic >= 0.0 && context.cycleEndMusic > 0.0 &&
+  if ((playHead != nullptr ||
+       (context.cycleStartMusic >= 0.0 && context.cycleEndMusic > 0.0)) &&
       context.cycleEndMusic > context.cycleStartMusic) {
     context.state |= ProcessContext::kCycleValid;
   }

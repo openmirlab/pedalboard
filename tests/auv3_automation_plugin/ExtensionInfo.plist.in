@@ -190,6 +190,46 @@
                     <key>type</key><string>aumf</string>
                     <key>version</key><integer>65536</integer>
                 </dict>
+                <dict>
+                    <key>description</key><string>AUv3 Automation Clock</string>
+                    <key>manufacturer</key><string>OMrl</string>
+                    <key>name</key><string>OpenMIRLab: AUv3 Automation Clock</string>
+                    <key>sandboxSafe</key><true/>
+                    <key>subtype</key><string>@PROBE_PREFIX@a</string>
+                    <key>tags</key><array><string>Effects</string></array>
+                    <key>type</key><string>aumf</string>
+                    <key>version</key><integer>65536</integer>
+                </dict>
+                <dict>
+                    <key>description</key><string>AUv3 Automation Meter</string>
+                    <key>manufacturer</key><string>OMrl</string>
+                    <key>name</key><string>OpenMIRLab: AUv3 Automation Meter</string>
+                    <key>sandboxSafe</key><true/>
+                    <key>subtype</key><string>@PROBE_PREFIX@b</string>
+                    <key>tags</key><array><string>Effects</string></array>
+                    <key>type</key><string>aumf</string>
+                    <key>version</key><integer>65536</integer>
+                </dict>
+                <dict>
+                    <key>description</key><string>AUv3 Automation Loop</string>
+                    <key>manufacturer</key><string>OMrl</string>
+                    <key>name</key><string>OpenMIRLab: AUv3 Automation Loop</string>
+                    <key>sandboxSafe</key><true/>
+                    <key>subtype</key><string>@PROBE_PREFIX@c</string>
+                    <key>tags</key><array><string>Effects</string></array>
+                    <key>type</key><string>aumf</string>
+                    <key>version</key><integer>65536</integer>
+                </dict>
+                <dict>
+                    <key>description</key><string>AUv3 Automation Position</string>
+                    <key>manufacturer</key><string>OMrl</string>
+                    <key>name</key><string>OpenMIRLab: AUv3 Automation Position</string>
+                    <key>sandboxSafe</key><true/>
+                    <key>subtype</key><string>@PROBE_PREFIX@d</string>
+                    <key>tags</key><array><string>Effects</string></array>
+                    <key>type</key><string>aumf</string>
+                    <key>version</key><integer>65536</integer>
+                </dict>
 			</array>
 		</dict>
 		<key>NSExtensionPointIdentifier</key>

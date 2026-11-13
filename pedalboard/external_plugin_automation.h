@@ -376,13 +376,14 @@ inline void initHostedAutomation(py::module &module, const char *className) {
       "process_buses",
       [](std::shared_ptr<Effect> self, py::dict inputs, double rate,
          py::dict outputs, py::object frames, int bufferSize, bool reset,
-         py::object midi, py::object automation, bool returnMidi) {
+         py::object midi, py::object automation, bool returnMidi,
+         py::object transport) {
         if (!automation.is_none() && !py::isinstance<py::dict>(automation))
           throw py::type_error(
               "automation must be a dict of display-unit NumPy curves");
         return self->processBuses(
             inputs, rate, outputs, frames, bufferSize, reset, midi, returnMidi,
-            [self, automation](size_t count) {
+            transport, [self, automation](size_t count) {
               return automation.is_none()
                          ? std::vector<DenseParameterControl>{}
                          : makeHostedControls<Backend>(
@@ -393,7 +394,7 @@ inline void initHostedAutomation(py::module &module, const char *className) {
       py::arg("output_buses"), py::arg("num_frames") = py::none(),
       py::arg("buffer_size") = DEFAULT_BUFFER_SIZE, py::arg("reset") = true,
       py::arg("midi_messages") = py::none(), py::arg("automation") = py::none(),
-      py::arg("return_midi") = false,
+      py::arg("return_midi") = false, py::arg("transport") = py::none(),
       "Process explicit planar audio buses and optional MIDI/parameter curves "
       "on "
       "one source timeline. Raw plugin latency is retained. Return an "

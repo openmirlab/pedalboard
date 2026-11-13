@@ -1,4 +1,5 @@
 /* Original AUv3 diagnostic extension, GPL-3.0-only. */
+#include "../hosted_transport_fixture.h"
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <Foundation/Foundation.h>
@@ -80,6 +81,7 @@ inline void applyEvent(DSP *dsp, const AURenderEvent *events,
   unsigned _instance;
   BOOL _instrument;
   BOOL _multipleBuses, _busIdentity, _audioMidi;
+  int _clockMode;
   unsigned _latency;
 }
 - (instancetype)
@@ -93,8 +95,10 @@ inline void applyEvent(DSP *dsp, const AURenderEvent *events,
     return nil;
   _instrument = description.componentType == kAudioUnitType_MusicDevice;
   const auto variant = description.componentSubType & 255;
+  _clockMode = variant >= 'a' && variant <= 'd' ? (int)(variant - 'a') : -1;
   _audioMidi = variant == '8' || variant == '9';
-  _multipleBuses = variant == '6' || variant == '7' || _audioMidi;
+  _multipleBuses =
+      variant == '6' || variant == '7' || _audioMidi || _clockMode >= 0;
   _busIdentity = variant == '7';
   _latency = variant == '1' || variant == '3' || variant == '9' ? 20
              : variant == '4'                                   ? 4097
@@ -285,6 +289,9 @@ inline void applyEvent(DSP *dsp, const AURenderEvent *events,
 - (AUInternalRenderBlock)internalRenderBlock {
   DSP *dsp = &_dsp;
   const BOOL instrument = _instrument;
+  const int clockMode = _clockMode;
+  __unsafe_unretained OMAutomationAU *unit = self;
+  const double renderRate = _outputs[0].format.sampleRate;
   const BOOL multipleBuses = _multipleBuses;
   const BOOL busIdentity = _busIdentity;
   const BOOL audioMidi = _audioMidi;
@@ -303,6 +310,49 @@ inline void applyEvent(DSP *dsp, const AURenderEvent *events,
     dsp->renderBusMask.fetch_or(1u << bus);
     if (frames > capacity)
       return (AUAudioUnitStatus)kAudioUnitErr_TooManyFramesToProcess;
+    if (clockMode >= 0) {
+      TransportObservation observed;
+      observed.rate = renderRate;
+      AUHostMusicalContextBlock musical = unit.musicalContextBlock;
+      AUHostTransportStateBlock transport = unit.transportStateBlock;
+      double num = 0;
+      NSInteger den = 0, delta = 0;
+      const bool musicOK =
+          musical && musical(&observed.tempo, &num, &den, &observed.ppq, &delta,
+                             &observed.bar);
+      observed.numerator = num;
+      observed.denominator = (int)den;
+      observed.nextBeat = (uint32_t)delta;
+      AUHostTransportStateFlags state = 0;
+      double frame = 0;
+      const bool transportOK =
+          transport &&
+          transport(&state, &frame, &observed.start, &observed.end);
+      observed.sample = (int64_t)frame;
+      observed.playing = state & AUHostTransportStateMoving;
+      observed.changed = state & AUHostTransportStateChanged;
+      observed.flags = (observed.playing ? 1 : 0) |
+                       ((state & AUHostTransportStateRecording) ? 2 : 0) |
+                       ((state & AUHostTransportStateCycling) ? 4 : 0) |
+                       (musicOK ? 8 + 16 + 32 + 128 : 0) |
+                       (transportOK && observed.end > observed.start ? 64 : 0);
+      for (UInt32 i = 0; i < frames; ++i) {
+        if (!bus) {
+          while (events &&
+                 (events->head.eventSampleTime == AUEventSampleTimeImmediate ||
+                  events->head.eventSampleTime <=
+                      (AUEventSampleTime)timestamp->mSampleTime + i)) {
+            applyEvent(dsp, events, true);
+            events = events->head.next;
+          }
+        }
+        const auto values = observed.audio(clockMode, i);
+        for (UInt32 c = 0; c < output->mNumberBuffers && c < 2; ++c)
+          static_cast<float *>(output->mBuffers[c].mData)[i] =
+              values[bus * 2 + c];
+      }
+      return (AUAudioUnitStatus)noErr;
+    }
     if (multipleBuses) {
       if (!pull || frames > 8192 || mainChannels > 2 || keyChannels > 2 ||
           bus > 1)

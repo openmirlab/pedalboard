@@ -15,7 +15,7 @@ and component subtypes depend on the build directory. The helper refuses to repl
 preexisting entries and unregisters its own entries at teardown. It uses no GUI,
 network, App Store account or private signing key.
 
-The extension principal class implements AUAudioUnitFactory. Ten components share
+The extension principal class implements AUAudioUnitFactory. Fourteen components share
 known DSP: a direct effect, a20-sample delayed effect, a note-gated instrument and
 three instruments delayed by20/4097/16385 reported samples.
 Each test uses the public AudioUnitPlugin API in a subprocess with a30-second bound;
@@ -31,7 +31,7 @@ checking that the legacy AU bridge does not truncate controls into the wrong nod
 
 Analytical tests use the same physical float32 oracle as the AUv2 suite, with3e-7
 absolute/relative error bounds. Partition/reset/hold comparisons require exact
-output equality. Tests cover ten component descriptions in one extension, relative/
+output equality. Tests cover fourteen component descriptions in one extension, relative/
 absolute/trailing-slash/symlink/Unicode paths, dB/Hz/boolean curves, reported latency,
 MIDI offsets/holds, graph queues, owned/omitted lanes, state and reinstantiation.
 Native scheduled events, third-party AUv3 vendor compatibility and GUI behavior are
@@ -69,3 +69,12 @@ physical dB/Hz controls, CC1 discrete bypass and raw20-sample main delay. Whole/
 streams match exactly. These variants declare MIDI input only; their empty output
 lists do not verify AU MIDI output. The original eight variants retain their
 behavior, including in-place capability and event processing contracts.
+
+`tests/test_auv3_hosted_transport.py` adds Clock/Meter/Loop/Position components.
+The actual remote render loop calls musicalContextBlock and transportStateBlock,
+then encodes received timing into four output channels. Tests assert signed 64-bit
+project frames, negative PPQ/bars, recording/play/loop flags, next-beat offsets,
+seek versus continuation, repeated fractional wraps and explicit split anchors.
+The clock branch also consumes its scheduled parameter/MIDI events, so joint
+clock/curve acceptance observes both native facilities. No vendor AUv3 clock
+interpretation or GUI compatibility is implied.

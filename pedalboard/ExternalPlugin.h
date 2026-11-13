@@ -29,6 +29,7 @@
 #include "Plugin.h"
 #include "au_automation_bridge.h"
 #include "hosted_audio.h"
+#include "hosted_transport.h"
 #include <atomic>
 #include <pybind11/stl.h>
 
@@ -1163,6 +1164,7 @@ public:
       automationActive = false;
       scalarHasProcessed = false;
       busMidiHasProcessed = false;
+      hostedClock.reset();
 #if JUCE_MAC && JUCE_PLUGINHOST_AU
       auAutomationParameters.clear();
 #endif
@@ -1295,10 +1297,11 @@ public:
   py::object processBuses(
       py::dict inputs, double sampleRate, py::dict outputs,
       py::object numFrames, int bufferSize, bool shouldReset,
-      py::object midiMessages, bool returnMidi,
+      py::object midiMessages, bool returnMidi, py::object transport,
       std::function<std::vector<DenseParameterControl>(size_t)> makeControls) {
     HostedAudioRequest request(inputs, outputs, numFrames, sampleRate,
                                bufferSize);
+    HostedTransport clockRequest(transport, sampleRate, request.frames);
     py::dict result;
     py::list messages;
     std::map<int, py::array_t<float>> arrays;
@@ -1399,6 +1402,16 @@ public:
           for (const auto &control : controls)
             curves.push_back({*control.externalId, nullptr});
         }
+        ScopedHostedClock clockScope(*pluginInstance, hostedClock, clockRequest,
+                                     continuation);
+#if JUCE_MAC && JUCE_PLUGINHOST_AU
+        if constexpr (std::is_same_v<ExternalPluginType,
+                                     juce::AudioUnitPluginFormat>) {
+          if (clockRequest.enabled || hostedClock.installed)
+            hostedClock.install(
+                AudioUnitAutomationBackend::handle(*pluginInstance));
+        }
+#endif
         const int capacity = std::min(bufferSize, DEFAULT_BUFFER_SIZE);
         juce::AudioBuffer<float> scratch(
             std::max(pluginInstance->getTotalNumInputChannels(),
@@ -1411,6 +1424,8 @@ public:
             count = std::min(
                 (size_t)count,
                 scheduledSpanEnd(start, request.frames, &controls, 0) - start);
+          count = clockRequest.span(start, count);
+          hostedClock.update(clockRequest, start, count);
           scratch.clear();
           juce::AudioBuffer<float> block(scratch.getArrayOfWritePointers(),
                                          scratch.getNumChannels(), count);
@@ -1998,6 +2013,7 @@ private:
   bool scalarHasProcessed = false, sampleSteps = true;
   bool busStreamActive = false;
   bool busMidiHasProcessed = false;
+  HostedClock hostedClock;
   double busStreamRate = 0;
 
   long samplesProvided = 0;

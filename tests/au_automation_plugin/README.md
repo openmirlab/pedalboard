@@ -10,7 +10,7 @@ silently skip. Tests build a temporary `.component`, load its factory with
 CoreFoundation and register it with AudioComponentRegister for this process only.
 `register.py` also registers the repository's real CHOWTapeModel AU fixture.
 
-Nine component descriptions share an original Audio Unit implementation:
+Sixteen component descriptions share an original Audio Unit implementation:
 
 - Automation AU: direct physical dB/Hz/boolean controls with nonconsecutive IDs.
 - Automation AU Delayed: twenty reported samples of delay.
@@ -33,3 +33,11 @@ normalized targets and native physical values each have float32 precision.
 Analytical audio comparisons allow3e-7 absolute/relative error. Same-binary stream/
 reset comparisons require exact equality. AUv3 and native scheduled events are not
 covered by this AUv2 fixture. Only macOS arm64 has been exercised locally.
+
+The bus and combined-input variants cover main/key inputs and main/aux outputs.
+Clock, Meter, Loop and Position diagnostics additionally encode actual native AU
+host callback values. They call the extended transport callback when supplied,
+including recording and transport-change state, and the musical callback for
+meter/bar/next-beat timing. tests/test_hosted_transport.py verifies these values
+against known clocks, loop phases and split anchors; no vendor AU certification
+or GUI behavior is claimed.

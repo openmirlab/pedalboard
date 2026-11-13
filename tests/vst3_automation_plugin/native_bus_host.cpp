@@ -3,6 +3,7 @@
 #include "host_events.h"
 #include "pluginterfaces/base/ipluginbase.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
+#include "pluginterfaces/vst/ivstprocesscontext.h"
 #include "pluginterfaces/vst/vstspeaker.h"
 #include <algorithm>
 #include <array>
@@ -28,7 +29,7 @@ static void require(bool condition, const char *message) {
 
 int main(int argc, char **argv) {
   try {
-    require((argc == 9 || argc == 10),
+    require((argc == 9 || argc == 10 || argc == 20),
             "binary output rate block main_channels key_channels "
             "aux_channels frames");
 #ifdef _WIN32
@@ -44,8 +45,12 @@ int main(int argc, char **argv) {
     require(getFactory, "Missing plugin factory");
     auto *factory = getFactory();
     PClassInfo info{};
+    const bool clockMode = argc == 20;
+    const std::string clockName =
+        clockMode ? "Automation Probe " + std::string(argv[9]) : "";
     const bool midiMode = argc == 10;
-    const char *name = !midiMode ? "Automation Probe Buses"
+    const char *name = clockMode   ? clockName.c_str()
+                       : !midiMode ? "Automation Probe Buses"
                        : std::strcmp(argv[9], "delayed") == 0
                            ? "Automation Probe Delayed Audio MIDI"
                            : "Automation Probe Audio MIDI";
@@ -107,8 +112,62 @@ int main(int argc, char **argv) {
       pointers[c] = storage[c].data();
     }
     std::ofstream midiFile(std::string(argv[2]) + ".midi");
-    for (int start = 0; start < frames; start += block) {
-      const int count = std::min(block, frames - start);
+    for (int start = 0; start < frames;) {
+      int count = std::min(block, frames - start);
+      ProcessContext timing{};
+      if (clockMode) {
+        const double bpm = std::stod(argv[10]),
+                     initialBeat = std::stod(argv[11]);
+        const int64 initialSample = std::stoll(argv[12]);
+        const bool playing = std::stoi(argv[13]),
+                   recording = std::stoi(argv[14]),
+                   looping = std::stoi(argv[15]);
+        const double firstBeat = std::stod(argv[16]),
+                     lastBeat = std::stod(argv[17]);
+        const int numerator = std::stoi(argv[18]),
+                  denominator = std::stoi(argv[19]);
+        const double beatStep = bpm / (60 * rate);
+        double beat = initialBeat + (playing ? start * beatStep : 0);
+        double exactSample = initialSample + (playing ? start : 0);
+        if (playing && looping) {
+          if (beat >= lastBeat - 1e-12) {
+            double phase = std::fmod(beat - firstBeat, lastBeat - firstBeat);
+            if (lastBeat - firstBeat - phase < 1e-12)
+              phase = 0;
+            beat = firstBeat + phase;
+            exactSample = initialSample + (beat - initialBeat) / beatStep;
+          }
+          // Independent host clips the native block at the next loop boundary.
+          const double remaining = (lastBeat - beat) / beatStep;
+          if (remaining < count)
+            count = std::max(1, (int)std::ceil(remaining - 1e-8));
+        }
+        timing.sampleRate = rate;
+        timing.tempo = bpm;
+        timing.projectTimeMusic = beat;
+        const double lower = std::floor(exactSample);
+        timing.projectTimeSamples =
+            (int64)(lower + (exactSample - lower >= .5 - 1e-8 ? 1 : 0));
+        timing.timeSigNumerator = numerator;
+        timing.timeSigDenominator = denominator;
+        timing.barPositionMusic =
+            std::floor(beat / (4.0 * numerator / denominator)) *
+            (4.0 * numerator / denominator);
+        timing.cycleStartMusic = firstBeat;
+        timing.cycleEndMusic = lastBeat;
+        timing.state = ProcessContext::kTempoValid |
+                       ProcessContext::kProjectTimeMusicValid |
+                       ProcessContext::kBarPositionValid |
+                       ProcessContext::kTimeSigValid;
+        if (playing)
+          timing.state |= ProcessContext::kPlaying;
+        if (recording)
+          timing.state |= ProcessContext::kRecording;
+        if (looping)
+          timing.state |= ProcessContext::kCycleActive;
+        if (lastBeat > firstBeat)
+          timing.state |= ProcessContext::kCycleValid;
+      }
       for (int c = 0; c < mainChannels; ++c)
         for (int i = 0; i < count; ++i)
           storage[c][i] = (c ? -.1f : .2f) + (start + i) * (1.f / 65536.f);
@@ -132,6 +191,8 @@ int main(int argc, char **argv) {
       data.numOutputs = 2;
       data.inputs = inputs;
       data.outputs = outputs;
+      if (clockMode)
+        data.processContext = &timing;
       HostEvents inputEvents, outputEvents;
       HostChanges changes;
       if (midiMode) {
@@ -172,6 +233,7 @@ int main(int argc, char **argv) {
       for (int c = 0; c < auxChannels; ++c)
         std::copy_n(storage[6 + c].data(), count,
                     output.data() + (mainChannels + c) * frames + start);
+      start += count;
     }
     std::ofstream file(argv[2], std::ios::binary);
     file.write(reinterpret_cast<const char *>(output.data()),

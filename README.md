@@ -189,7 +189,8 @@ For streaming, explicitly reset the root/plugin first and use `reset=False` on
 matching slices. Starting curves after warm scalar processing also requires a
 reset. Do not change plugin state/presets or process participating children
 independently during an active graph session. See below for AU automation and
-explicit audio buses; transport and warm-state cloning remain separate capabilities.
+explicit audio buses and caller-controlled transport. Warm-state cloning remains
+a separate capability.
 
 ### Audio Unit automation on macOS
 
@@ -268,6 +269,17 @@ inherited AU host keeps omitted inputs active with silence and discards omitted
 outputs. Native layout negotiation may reject unsupported combinations after
 reset. See the [hosting contract](docs/source/hosting.rst) for state boundaries,
 supported arrangements, timing and verification scope.
+
+### Caller-controlled plugin transport
+
+`process_buses(..., transport={"bpm": 90.0, "sample_position": 0,
+"ppq_position": 0.0, "playing": True, "time_signature": (4, 4)})` supplies
+an explicit project clock to VST3 and Audio Unit plugins alongside buses, MIDI and
+parameter curves. Each call supplies its own start anchor; `transport=None`
+preserves the original default clock. Optional recording and quarter-note loop
+bounds are supported. Looping wraps the plugin clock, while the caller supplies
+source audio and notes. See [hosted routing and transport](docs/source/hosting.rst)
+for stopped-clock, fractional-loop and verification boundaries.
 
 ## Save and restore configurations
 
