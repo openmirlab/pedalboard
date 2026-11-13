@@ -40,3 +40,20 @@ required by this JUCE wrapper. Enable only with an appropriate toolchain using
 `-DPEDALBOARD_BUILD_JUCE_SIDECHAIN_AU=ON`. AU bus coverage uses the separate native
 AUv2 and AUv3 fixtures; no JUCE NoiseGate AU acceptance is claimed. Other OS builds
 remain unverified.
+
+## Combined audio and MIDI example
+
+Configure with `-DPEDALBOARD_BUILD_JUCE_COMBINED=ON` to build a VST3 wrapper for the
+unchanged pinned `AudioPluginDemo.h`. It mixes incoming audio with its musical
+sine-wave synthesizer and retains the original MIDI output behavior. The native
+host accepts an extra `combined` CLI argument and routes the same input notes and
+audio. `test_hosted_audio_midi.py -k unmodified_juce` requires exact audio and
+returned note timing for with/without MIDI,44.1/48kHz and1/31/8192 caller spans.
+The same PEDALBOARD_TEST_JUCE_SIDECHAIN_BUILD variable selects this optional build.
+This is verified on macOS arm64; no editor, DAW or system installation is used.
+
+The example's own reset clears its delay memory but does not stop held synth
+voices. A targeted regression requires the new hosted MIDI path to cold-reload
+on an explicit reset after delivering events, while reset=False retains a held
+voice. This uses the existing reload mechanism and its main-thread restriction;
+it does not alter the audio-only convenience reset classification.

@@ -248,6 +248,15 @@ outputs = vst.process_buses(
     output_buses={0: 2},
 )
 processed_main = outputs[0]
+
+# Optional MIDI and physical-unit curves share the source-audio timeline.
+outputs, midi_out = vst.process_buses(
+    {0: main_audio, 1: detector_audio}, sample_rate,
+    output_buses={0: 2},
+    midi_messages=[(bytes([0x90, 60, 100]), 31 / sample_rate)],
+    automation={"gain_db": np.linspace(-12, 0, main_audio.shape[1])},
+    return_midi=True,
+)
 ```
 
 Each input is an explicit planar `(channels, frames)` float32/float64 array.

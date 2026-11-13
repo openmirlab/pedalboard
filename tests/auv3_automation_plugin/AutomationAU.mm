@@ -35,6 +35,40 @@ struct DSP {
       channel.fill(0);
   }
 };
+inline void applyEvent(DSP *dsp, const AURenderEvent *events,
+                       bool controllers = false) {
+  if (events->head.eventType == AURenderEventParameter) {
+    const auto &p = events->parameter;
+    switch (p.parameterAddress) {
+    case gainAddress:
+      dsp->gain.store(p.value);
+      break;
+    case frequencyAddress:
+      dsp->frequency.store(p.value);
+      break;
+    case passAddress:
+      dsp->pass.store(p.value);
+      break;
+    case identityAddress:
+      dsp->identity.store(p.value);
+      break;
+    case lowAddress:
+      dsp->decoy.store(p.value);
+      break;
+    default:
+      break;
+    }
+  } else if (events->head.eventType == AURenderEventMIDI) {
+    const auto *data = events->MIDI.data;
+    if ((data[0] & 0xf0) == 0x90)
+      dsp->note = data[2] > 0;
+    if ((data[0] & 0xf0) == 0x80)
+      dsp->note = false;
+    if (controllers && events->MIDI.length >= 3 && (data[0] & 0xf0) == 0xb0 &&
+        data[1] == 1)
+      dsp->pass.store(data[2] >= 64 ? 1 : 0);
+  }
+}
 } // namespace
 
 @interface OMAutomationAU : AUAudioUnit
@@ -45,7 +79,7 @@ struct DSP {
   DSP _dsp;
   unsigned _instance;
   BOOL _instrument;
-  BOOL _multipleBuses, _busIdentity;
+  BOOL _multipleBuses, _busIdentity, _audioMidi;
   unsigned _latency;
 }
 - (instancetype)
@@ -59,12 +93,13 @@ struct DSP {
     return nil;
   _instrument = description.componentType == kAudioUnitType_MusicDevice;
   const auto variant = description.componentSubType & 255;
-  _multipleBuses = variant == '6' || variant == '7';
+  _audioMidi = variant == '8' || variant == '9';
+  _multipleBuses = variant == '6' || variant == '7' || _audioMidi;
   _busIdentity = variant == '7';
-  _latency = variant == '1' || variant == '3' ? 20
-             : variant == '4'                 ? 4097
-             : variant == '5'                 ? 16385
-                                              : 0;
+  _latency = variant == '1' || variant == '3' || variant == '9' ? 20
+             : variant == '4'                                   ? 4097
+             : variant == '5'                                   ? 16385
+                                                                : 0;
   _instance = nextInstance.fetch_add(1);
   AVAudioFormat *format =
       [[AVAudioFormat alloc] initStandardFormatWithSampleRate:44100 channels:2];
@@ -131,7 +166,8 @@ struct DSP {
            kAudioUnitParameterUnit_Generic, NO);
   identity.value = decoy.value = 0;
   gain.value = 0;
-  frequency.value = 20;
+  frequency.value = _audioMidi ? 20000 : 20;
+  _dsp.frequency.store(_audioMidi ? 20000 : 20);
   pass.value = 0;
   pid.value = getpid();
   instance.value = _instance;
@@ -251,6 +287,7 @@ struct DSP {
   const BOOL instrument = _instrument;
   const BOOL multipleBuses = _multipleBuses;
   const BOOL busIdentity = _busIdentity;
+  const BOOL audioMidi = _audioMidi;
   const unsigned mainChannels =
       _instrument ? 0 : _inputs[0].format.channelCount;
   const unsigned keyChannels =
@@ -287,17 +324,43 @@ struct DSP {
         if (status != noErr)
           return status;
       }
-      for (UInt32 c = 0; c < output->mNumberBuffers; ++c) {
-        auto *target = static_cast<float *>(output->mBuffers[c].mData);
-        const auto *source = static_cast<const float *>(
-            sources[0].mBuffers[c % mainChannels].mData);
-        const auto *keySource =
-            static_cast<const float *>(sources[1].mBuffers[0].mData);
-        for (UInt32 i = 0; i < frames; ++i)
-          target[i] =
-              busIdentity ? (float)getpid()
-              : bus ? source[i] * .5f
-                    : source[i] * (std::abs(keySource[i]) > .5f ? .25f : 1.f);
+      for (UInt32 i = 0; i < frames; ++i) {
+        if (audioMidi && !bus) {
+          while (events &&
+                 (events->head.eventSampleTime == AUEventSampleTimeImmediate ||
+                  events->head.eventSampleTime <=
+                      (AUEventSampleTime)timestamp->mSampleTime + i)) {
+            applyEvent(dsp, events, audioMidi);
+            events = events->head.next;
+          }
+        }
+        const double gain =
+            audioMidi ? std::pow(10.0, dsp->gain.load() / 20.0) : 1;
+        const double frequency = audioMidi ? dsp->frequency.load() : 20000;
+        for (UInt32 c = 0; c < output->mNumberBuffers; ++c) {
+          auto *target = static_cast<float *>(output->mBuffers[c].mData);
+          const auto *source = static_cast<const float *>(
+              sources[0].mBuffers[c % mainChannels].mData);
+          const auto *keySource =
+              static_cast<const float *>(sources[1].mBuffers[0].mData);
+          float value =
+              busIdentity                           ? (float)getpid()
+              : bus                                 ? source[i] * .5f
+              : audioMidi && dsp->pass.load() >= .5 ? source[i]
+              : audioMidi
+                  ? (float)(source[i] *
+                            (std::abs(keySource[i]) > .5f ? .25f : 1.f) *
+                            (dsp->note ? 1 : 0) * gain * frequency / 20000.0)
+                  : source[i] * (std::abs(keySource[i]) > .5f ? .25f : 1.f);
+          if (latency && !bus) {
+            const float old = dsp->delay[c][dsp->position];
+            dsp->delay[c][dsp->position] = value;
+            value = old;
+          }
+          target[i] = value;
+        }
+        if (audioMidi && !bus)
+          dsp->position = (dsp->position + 1) % std::max(20u, latency);
       }
       return (AUAudioUnitStatus)noErr;
     }
@@ -313,34 +376,7 @@ struct DSP {
              (events->head.eventSampleTime == AUEventSampleTimeImmediate ||
               events->head.eventSampleTime <=
                   (AUEventSampleTime)timestamp->mSampleTime + i)) {
-        if (events->head.eventType == AURenderEventParameter) {
-          const auto &p = events->parameter;
-          switch (p.parameterAddress) {
-          case gainAddress:
-            dsp->gain.store(p.value);
-            break;
-          case frequencyAddress:
-            dsp->frequency.store(p.value);
-            break;
-          case passAddress:
-            dsp->pass.store(p.value);
-            break;
-          case identityAddress:
-            dsp->identity.store(p.value);
-            break;
-          case lowAddress:
-            dsp->decoy.store(p.value);
-            break;
-          default:
-            break;
-          }
-        } else if (events->head.eventType == AURenderEventMIDI) {
-          const auto *data = events->MIDI.data;
-          if ((data[0] & 0xf0) == 0x90)
-            dsp->note = data[2] > 0;
-          if ((data[0] & 0xf0) == 0x80)
-            dsp->note = false;
-        }
+        applyEvent(dsp, events);
         events = events->head.next;
       }
       const double gain = std::pow(10.0, dsp->gain.load() / 20.0);

@@ -170,6 +170,26 @@
                     <key>type</key><string>aumf</string>
                     <key>version</key><integer>65536</integer>
                 </dict>
+                <dict>
+                    <key>description</key><string>AUv3 Automation Audio MIDI</string>
+                    <key>manufacturer</key><string>OMrl</string>
+                    <key>name</key><string>OpenMIRLab: AUv3 Automation Audio MIDI</string>
+                    <key>sandboxSafe</key><true/>
+                    <key>subtype</key><string>@PROBE_PREFIX@8</string>
+                    <key>tags</key><array><string>Effects</string></array>
+                    <key>type</key><string>aumf</string>
+                    <key>version</key><integer>65536</integer>
+                </dict>
+                <dict>
+                    <key>description</key><string>AUv3 Automation Delayed Audio MIDI</string>
+                    <key>manufacturer</key><string>OMrl</string>
+                    <key>name</key><string>OpenMIRLab: AUv3 Automation Delayed Audio MIDI</string>
+                    <key>sandboxSafe</key><true/>
+                    <key>subtype</key><string>@PROBE_PREFIX@9</string>
+                    <key>tags</key><array><string>Effects</string></array>
+                    <key>type</key><string>aumf</string>
+                    <key>version</key><integer>65536</integer>
+                </dict>
 			</array>
 		</dict>
 		<key>NSExtensionPointIdentifier</key>

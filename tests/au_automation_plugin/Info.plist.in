@@ -157,6 +157,24 @@
             <key>type</key><string>aumf</string>
             <key>version</key><integer>65536</integer>
         </dict>
+        <dict>
+            <key>description</key><string>Automation AU Audio MIDI</string>
+            <key>factoryFunction</key><string>AutomationAUFactory</string>
+            <key>manufacturer</key><string>OMrl</string>
+            <key>name</key><string>OpenMIRLab: Automation AU Audio MIDI</string>
+            <key>subtype</key><string>AuPa</string>
+            <key>type</key><string>aumf</string>
+            <key>version</key><integer>65536</integer>
+        </dict>
+        <dict>
+            <key>description</key><string>Automation AU Delayed Audio MIDI</string>
+            <key>factoryFunction</key><string>AutomationAUFactory</string>
+            <key>manufacturer</key><string>OMrl</string>
+            <key>name</key><string>OpenMIRLab: Automation AU Delayed Audio MIDI</string>
+            <key>subtype</key><string>AuPb</string>
+            <key>type</key><string>aumf</string>
+            <key>version</key><integer>65536</integer>
+        </dict>
 	</array>
 	<key>CFBundleExecutable</key>
 	<string>AutomationAU</string>

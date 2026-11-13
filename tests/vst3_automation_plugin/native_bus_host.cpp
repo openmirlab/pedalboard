@@ -1,5 +1,6 @@
 /* Independent VST3 SDK routing oracle. Loads the same fixture binary through
  * its exported factory, without Pedalboard/JUCE processing. GPL-3.0-only. */
+#include "host_events.h"
 #include "pluginterfaces/base/ipluginbase.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 #include "pluginterfaces/vst/vstspeaker.h"
@@ -27,8 +28,9 @@ static void require(bool condition, const char *message) {
 
 int main(int argc, char **argv) {
   try {
-    require(argc == 9, "binary output rate block main_channels key_channels "
-                       "aux_channels frames");
+    require((argc == 9 || argc == 10),
+            "binary output rate block main_channels key_channels "
+            "aux_channels frames");
 #ifdef _WIN32
     auto module = LoadLibraryA(argv[1]);
     auto getFactory = reinterpret_cast<IPluginFactory *(*)()>(
@@ -42,11 +44,16 @@ int main(int argc, char **argv) {
     require(getFactory, "Missing plugin factory");
     auto *factory = getFactory();
     PClassInfo info{};
+    const bool midiMode = argc == 10;
+    const char *name = !midiMode ? "Automation Probe Buses"
+                       : std::strcmp(argv[9], "delayed") == 0
+                           ? "Automation Probe Delayed Audio MIDI"
+                           : "Automation Probe Audio MIDI";
     bool found = false;
     for (int i = 0; i < factory->countClasses(); ++i) {
       require(factory->getClassInfo(i, &info) == kResultOk,
               "Class query failed");
-      if (std::strcmp(info.name, "Automation Probe Buses") == 0) {
+      if (std::strcmp(info.name, name) == 0) {
         found = true;
         break;
       }
@@ -99,6 +106,7 @@ int main(int argc, char **argv) {
       storage[c].resize(block);
       pointers[c] = storage[c].data();
     }
+    std::ofstream midiFile(std::string(argv[2]) + ".midi");
     for (int start = 0; start < frames; start += block) {
       const int count = std::min(block, frames - start);
       for (int c = 0; c < mainChannels; ++c)
@@ -124,7 +132,40 @@ int main(int argc, char **argv) {
       data.numOutputs = 2;
       data.inputs = inputs;
       data.outputs = outputs;
+      HostEvents inputEvents, outputEvents;
+      HostChanges changes;
+      if (midiMode) {
+        const int positions[] = {0, 7, 31, 127, 128, 258};
+        for (int index = 0; index < 6; ++index) {
+          if (positions[index] < start || positions[index] >= start + count)
+            continue;
+          Event event{};
+          event.sampleOffset = positions[index] - start;
+          if (index % 2 == 0) {
+            event.type = Event::kNoteOnEvent;
+            event.noteOn.pitch = 60;
+            event.noteOn.velocity = 100.f / 127.f;
+            event.noteOn.noteId = -1;
+          } else {
+            event.type = Event::kNoteOffEvent;
+            event.noteOff.pitch = 60;
+            event.noteOff.noteId = -1;
+          }
+          inputEvents.addEvent(event);
+        }
+        changes.gain.points = {{0, (float)(60.0 / 72.0)}};
+        changes.frequency.points = {{0, 1}};
+        data.inputParameterChanges = &changes;
+        data.inputEvents = &inputEvents;
+        data.outputEvents = &outputEvents;
+      }
       require(processor->process(data) == kResultOk, "Native process failed");
+      if (midiMode)
+        for (const auto &event : outputEvents.events)
+          midiFile << start + event.sampleOffset << ' ' << event.type << ' '
+                   << (event.type == Event::kNoteOnEvent ? event.noteOn.pitch
+                                                         : event.noteOff.pitch)
+                   << '\n';
       for (int c = 0; c < mainChannels; ++c)
         std::copy_n(storage[4 + c].data(), count,
                     output.data() + c * frames + start);

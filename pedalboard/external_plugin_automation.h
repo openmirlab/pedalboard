@@ -216,6 +216,122 @@ struct HostedCurveModel {
   std::vector<double> physical;
 };
 
+template <typename Backend, typename Effect>
+inline std::vector<DenseParameterControl>
+makeHostedControls(const std::shared_ptr<Effect> &self, py::dict mapping,
+                   size_t frames) {
+  auto &instance = self->automationInstance();
+  // Naming metadata only: do not instantiate the Python range-guessing
+  // wrapper, which has a parameter-mutating fallback for some third-party
+  // plugins.
+  auto normalize = py::module_::import("pedalboard._pedalboard")
+                       .attr("to_python_parameter_name");
+  std::map<std::string, std::vector<int>> aliases;
+  for (auto *parameter : self->getParameters()) {
+    auto alias =
+        normalize(py::cast(parameter, py::return_value_policy::reference));
+    if (!alias.is_none())
+      aliases[alias.template cast<std::string>()].push_back(
+          parameter->getParameterIndex());
+  }
+  std::vector<DenseParameterControl> controls;
+  for (auto entry : mapping) {
+    if (!py::isinstance<py::str>(entry.first))
+      throw py::type_error(
+          "External plugin automation keys must be parameter names");
+    const auto name = py::cast<std::string>(entry.first);
+    auto found = aliases.find(name);
+    if (found == aliases.end() || found->second.size() != 1)
+      throw py::value_error(
+          "Unknown or ambiguous plugin automation parameter: " + name);
+    const auto description = Backend::describe(instance, found->second.front());
+    if (!py::isinstance<py::array>(entry.second))
+      throw py::type_error("Each automation curve must be a NumPy array");
+    auto curve = py::reinterpret_borrow<py::array>(entry.second);
+    const std::string kind = py::str(curve.dtype().attr("kind"));
+    if (kind != "f" && kind != "i" && kind != "u" &&
+        !(kind == "b" && description.steps == 1 && description.units.isEmpty()))
+      throw py::type_error(
+          "External plugin display curves must contain real numbers");
+    if (curve.ndim() != 1 || (size_t)curve.shape(0) != frames)
+      throw py::value_error(
+          "Curves require one display-unit value per input frame");
+    auto values =
+        py::array_t<double, py::array::c_style | py::array::forcecast>::ensure(
+            curve);
+    auto data = values.unchecked<1>();
+    std::vector<float> normalized;
+    normalized.reserve(frames);
+    auto model = std::make_shared<HostedCurveModel>();
+    model->physical.reserve(frames);
+    if (frames) {
+      try {
+        HostedDisplayConverter<Backend> converter(instance, description);
+        model->signature = converter.signature();
+        double previous = std::numeric_limits<double>::quiet_NaN();
+        float converted = 0;
+        for (size_t i = 0; i < frames; ++i) {
+          if (data(i) != previous) {
+            converted = converter.convert(data(i));
+            previous = data(i);
+          }
+          normalized.push_back(converted);
+          model->physical.push_back(data(i));
+        }
+      } catch (const std::exception &error) {
+        throw py::value_error("Invalid plugin automation for '" + name +
+                              "': " + error.what());
+      }
+    }
+    const auto id = description.id;
+    controls.push_back({std::move(normalized),
+                        [self, id](float value) {
+                          Backend::set(self->automationInstance(), id, value);
+                        },
+                        {},
+                        name,
+                        id});
+    controls.back().validateSchema = [self, id, model] {
+      auto &current = self->automationInstance();
+      HostedDisplayConverter<Backend> converter(
+          current, Backend::describeById(current, id));
+      if (converter.signature() != model->signature)
+        throw std::invalid_argument(
+            "External plugin conversion model changed while "
+            "targets are pending; reset the root");
+    };
+    controls.back().resolvePrepared = [self, id, model](auto &control,
+                                                        bool continuation) {
+      auto &current = self->automationInstance();
+      HostedDisplayConverter<Backend> converter(
+          current, Backend::describeById(current, id));
+      const bool changed = converter.signature() != model->signature;
+      if (changed) {
+        if (continuation || model->physical.size() != control.values.size())
+          throw std::invalid_argument(
+              "External plugin conversion model changed in a "
+              "stream; reset the plugin/root");
+        double previous = std::numeric_limits<double>::quiet_NaN();
+        float value = 0;
+        for (size_t i = 0; i < model->physical.size(); ++i) {
+          if (model->physical[i] != previous) {
+            value = converter.convert(model->physical[i]);
+            previous = model->physical[i];
+          }
+          control.values[i] = value;
+        }
+        model->signature = converter.signature();
+      }
+      std::vector<double>().swap(model->physical);
+      return changed;
+    };
+  }
+  std::sort(controls.begin(), controls.end(), [](const auto &a, const auto &b) {
+    return *a.externalId < *b.externalId;
+  });
+  return controls;
+}
+
 template <typename Format, typename Backend>
 inline void initHostedAutomation(py::module &module, const char *className) {
   using Effect = ExternalPlugin<Format>;
@@ -225,120 +341,10 @@ inline void initHostedAutomation(py::module &module, const char *className) {
                                      ChannelLayout layout, bool reset) {
     auto self = std::dynamic_pointer_cast<Effect>(plugin);
     std::scoped_lock lock(self->mutex);
-    auto &instance = self->automationInstance();
-    // Naming metadata only: do not instantiate the Python range-guessing
-    // wrapper, which has a parameter-mutating fallback for some third-party
-    // plugins.
-    auto normalize = py::module_::import("pedalboard._pedalboard")
-                         .attr("to_python_parameter_name");
-    std::map<std::string, std::vector<int>> aliases;
-    for (auto *parameter : self->getParameters()) {
-      auto alias =
-          normalize(py::cast(parameter, py::return_value_policy::reference));
-      if (!alias.is_none())
-        aliases[alias.template cast<std::string>()].push_back(
-            parameter->getParameterIndex());
-    }
-    std::vector<DenseParameterControl> controls;
+    auto controls = makeHostedControls<Backend>(self, mapping, frames);
     std::vector<uint32_t> ids;
-    for (auto entry : mapping) {
-      if (!py::isinstance<py::str>(entry.first))
-        throw py::type_error(
-            "External plugin automation keys must be parameter names");
-      const auto name = py::cast<std::string>(entry.first);
-      auto found = aliases.find(name);
-      if (found == aliases.end() || found->second.size() != 1)
-        throw py::value_error(
-            "Unknown or ambiguous plugin automation parameter: " + name);
-      const auto description =
-          Backend::describe(instance, found->second.front());
-      if (!py::isinstance<py::array>(entry.second))
-        throw py::type_error("Each automation curve must be a NumPy array");
-      auto curve = py::reinterpret_borrow<py::array>(entry.second);
-      const std::string kind = py::str(curve.dtype().attr("kind"));
-      if (kind != "f" && kind != "i" && kind != "u" &&
-          !(kind == "b" && description.steps == 1 &&
-            description.units.isEmpty()))
-        throw py::type_error(
-            "External plugin display curves must contain real numbers");
-      if (curve.ndim() != 1 || (size_t)curve.shape(0) != frames)
-        throw py::value_error(
-            "Curves require one display-unit value per input frame");
-      auto values =
-          py::array_t<double,
-                      py::array::c_style | py::array::forcecast>::ensure(curve);
-      auto data = values.unchecked<1>();
-      std::vector<float> normalized;
-      normalized.reserve(frames);
-      auto model = std::make_shared<HostedCurveModel>();
-      model->physical.reserve(frames);
-      if (frames) {
-        try {
-          HostedDisplayConverter<Backend> converter(instance, description);
-          model->signature = converter.signature();
-          double previous = std::numeric_limits<double>::quiet_NaN();
-          float converted = 0;
-          for (size_t i = 0; i < frames; ++i) {
-            if (data(i) != previous) {
-              converted = converter.convert(data(i));
-              previous = data(i);
-            }
-            normalized.push_back(converted);
-            model->physical.push_back(data(i));
-          }
-        } catch (const std::exception &error) {
-          throw py::value_error("Invalid plugin automation for '" + name +
-                                "': " + error.what());
-        }
-      }
-      const auto id = description.id;
-      controls.push_back({std::move(normalized),
-                          [self, id](float value) {
-                            Backend::set(self->automationInstance(), id, value);
-                          },
-                          {},
-                          name,
-                          id});
-      controls.back().validateSchema = [self, id, model] {
-        auto &current = self->automationInstance();
-        HostedDisplayConverter<Backend> converter(
-            current, Backend::describeById(current, id));
-        if (converter.signature() != model->signature)
-          throw std::invalid_argument(
-              "External plugin conversion model changed while "
-              "targets are pending; reset the root");
-      };
-      controls.back().resolvePrepared = [self, id, model](auto &control,
-                                                          bool continuation) {
-        auto &current = self->automationInstance();
-        HostedDisplayConverter<Backend> converter(
-            current, Backend::describeById(current, id));
-        const bool changed = converter.signature() != model->signature;
-        if (changed) {
-          if (continuation || model->physical.size() != control.values.size())
-            throw std::invalid_argument(
-                "External plugin conversion model changed in a "
-                "stream; reset the plugin/root");
-          double previous = std::numeric_limits<double>::quiet_NaN();
-          float value = 0;
-          for (size_t i = 0; i < model->physical.size(); ++i) {
-            if (model->physical[i] != previous) {
-              value = converter.convert(model->physical[i]);
-              previous = model->physical[i];
-            }
-            control.values[i] = value;
-          }
-          model->signature = converter.signature();
-        }
-        std::vector<double>().swap(model->physical);
-        return changed;
-      };
-      ids.push_back(id);
-    }
-    std::sort(controls.begin(), controls.end(),
-              [](const auto &a, const auto &b) {
-                return *a.externalId < *b.externalId;
-              });
+    for (const auto &control : controls)
+      ids.push_back(*control.externalId);
     auto adapter = std::make_shared<DenseParameterProcessor>(
         self, std::move(controls), layout, channels,
         [self, reset, sampleRate, channels](const auto &values) {
@@ -367,15 +373,38 @@ inline void initHostedAutomation(py::module &module, const char *className) {
                                 "Fresh input/output audio bus metadata; "
                                 "indices are routing identifiers.");
   binding.def(
-      "process_buses", &Effect::processBuses, py::arg("input_buses"),
-      py::arg("sample_rate"), py::kw_only(), py::arg("output_buses"),
-      py::arg("num_frames") = py::none(),
+      "process_buses",
+      [](std::shared_ptr<Effect> self, py::dict inputs, double rate,
+         py::dict outputs, py::object frames, int bufferSize, bool reset,
+         py::object midi, py::object automation, bool returnMidi) {
+        if (!automation.is_none() && !py::isinstance<py::dict>(automation))
+          throw py::type_error(
+              "automation must be a dict of display-unit NumPy curves");
+        return self->processBuses(
+            inputs, rate, outputs, frames, bufferSize, reset, midi, returnMidi,
+            [self, automation](size_t count) {
+              return automation.is_none()
+                         ? std::vector<DenseParameterControl>{}
+                         : makeHostedControls<Backend>(
+                               self, automation.cast<py::dict>(), count);
+            });
+      },
+      py::arg("input_buses"), py::arg("sample_rate"), py::kw_only(),
+      py::arg("output_buses"), py::arg("num_frames") = py::none(),
       py::arg("buffer_size") = DEFAULT_BUFFER_SIZE, py::arg("reset") = true,
-      "Route planar arrays through explicit audio buses. Return a dict from "
-      "output bus index to planar float32 audio, with raw plugin latency. "
-      "Omitted VST3 buses are disabled; omitted AU inputs receive silence. "
-      "Layouts must be jointly supported. "
-      "Reset before changing routing, rate or processing API.");
+      py::arg("midi_messages") = py::none(), py::arg("automation") = py::none(),
+      py::arg("return_midi") = false,
+      "Process explicit planar audio buses and optional MIDI/parameter curves "
+      "on "
+      "one source timeline. Raw plugin latency is retained. Return an "
+      "output-bus "
+      "dict, or (dict, timestamped MIDI list) with return_midi=True. "
+      "Reset before changing native routing, rate or processing API.");
+  binding.def_property_readonly("midi_capabilities",
+                                &Effect::getMidiCapabilities,
+                                "Declared accepts_input/produces_output MIDI "
+                                "capabilities; not a guarantee "
+                                "that a plugin uses each message.");
   binding.def(
       "prepare_automation",
       [](std::shared_ptr<Effect> self, double rate, unsigned int channels) {

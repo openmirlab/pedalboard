@@ -55,6 +55,67 @@ omitted AU output buses are processed and discarded. Metadata shows these buses
 as enabled. No unconnected signal leaks into the selected outputs through the
 host's scratch buffer.
 
+MIDI and parameter curves on the same clock
+------------------------------------------
+
+``process_buses`` accepts ``midi_messages`` and ``automation`` together with audio::
+
+    import numpy as np
+
+    outputs, midi_out = plugin.process_buses(
+        {0: main_audio, 1: detector_audio}, 48000,
+        output_buses={0: 2},
+        midi_messages=[(bytes([0x90, 60, 100]), 31 / 48000)],
+        automation={"gain_db": np.linspace(-12, 0, main_audio.shape[1])},
+        return_midi=True,
+    )
+
+The default ``return_midi=False`` preserves the original output-bus dictionary.
+With ``True``, the result is ``(output_bus_dict, midi_messages)``. MIDI output
+messages are ``(bytes, seconds)`` pairs relative to the beginning of this call.
+No hidden global cursor is added to returned timestamps. Output messages are
+captured only when requested and are never fed into later input spans.
+
+Input MIDI uses the existing byte/timestamp or mido.Message representation;
+timestamps are absolute seconds within the call, not delta times. Events are
+placed relative to each actual native processing span, including subdivisions
+created by curves. Negative timestamps and events at/after ``num_frames`` are
+excluded. No note-off, tail or latency drain is synthesized. To hold a note across
+calls, send its note-on once, continue with ``reset=False``, then send its note-off
+at the appropriate offset in a later call. Input-free instruments use
+``input_buses={}`` and an explicit ``num_frames``. These are audio-producing
+instruments; the existing loader still rejects MIDI-only processors with no audio
+output ports.
+
+``midi_capabilities`` reports the native ``accepts_input`` and ``produces_output``
+declarations. A nonempty MIDI buffer on a plugin declaring no input is rejected
+before reset. A plugin declaring no output returns an empty output list. Declarations
+alone do not prove that a plugin responds to every message type or controller.
+VST3 controller messages follow the plugin's native MIDI-to-parameter mapping;
+unmapped controls need not affect its sound. MIDI port routing currently uses the
+host's existing main event port; this does not expose separate MIDI bus selection.
+
+Automation retains display units (dB, Hz or the parameter's native numeric units),
+with one NumPy value per source frame. ``sample_steps`` is the precise default;
+constant runs coalesce in C++ and differing targets split native spans. VST3 also
+accepts the existing opt-in ``vst3_events`` mode; AU supports sample steps only.
+Physical conversion is shared with the existing convenience APIs and is checked
+again after format preparation. If load-time ranges exclude desired targets,
+first prepare the desired format (for a compatible main layout, use
+``prepare_automation``), then submit bus curves with the prepared model. Preparation
+and native failures can already have changed history. Plugin smoothers and
+block-dependent DSP remain part of its behavior. MIDI controller mappings and
+curves addressing the same knob follow native plugin/queue ordering, without a
+new host-wide priority rule.
+
+Each raw bus call consumes all its submitted targets. Omitted lanes retain the
+plugin's current setting. Curves may be added to an existing bus stream; switching
+native automation delivery modes after activation requires a reset. The graph
+convenience API's pending-control queues and automatic PDC are separate contracts.
+Pure array/index/curve failures precede MIDI iteration and reset; MIDI timestamps
+are validated before resetting. Python generators run without the plugin mutex,
+and routing/schema are revalidated afterward. Empty renders do not consume MIDI.
+
 Timing and state
 ----------------
 
@@ -64,8 +125,12 @@ source timeline. The caller owns any path compensation in its surrounding mixer.
 Use the existing MIDI convenience API for
 :doc:`compensated offline instrument rendering <instrument_latency>`.
 
-``reset=True`` starts a new render, clearing processing history and preparing a
-joint bus layout. ``reset=False`` continues the same stream. Changing sample rate
+``reset=True`` starts a new render using the existing native reset/reload policy
+and prepares a joint bus layout. After this explicit path has delivered MIDI,
+reset conservatively reinstantiates the plugin: audio-only reset detection does
+not establish that an effect clears its held voices. This costs more than a
+simple native reset and requires the main thread, like the existing instrument
+reload path. It leaves continuous ``reset=False`` processing unchanged. ``reset=False`` continues the same stream. Changing sample rate
 or routing, or switching between this explicit path and the convenience audio/MIDI
 APIs, requires a reset. Caller ``buffer_size`` may vary without re-preparing a
 continuous bus stream; native spans are bounded by 8192 frames and the caller's
@@ -103,3 +168,15 @@ commercial third-party AU sidechain or vendor-distributed AUv3 certification is
 claimed. Native execution has been verified on macOS arm64; other OS/architectures
 remain unverified. Diagnostic evidence does not establish compatibility with
 every plugin, platform or speaker layout.
+
+Combined-input verification includes source-built VST3/AUv2 and actual remote
+AUv3 note-gated effects with separate sidechain/auxiliary ports, gain/Hz curves,
+CC1 mapped to a discrete bypass, and raw20-sample delay. VST3 returned note events
+are compared to an independent SDK host loading the same binary, with output/input
+separation checks. The AU fixtures declare no MIDI output, so their empty results
+do not certify AU output delivery. Magical8bitPlug2 VST3/AUv2 audio matches the
+existing MIDI convenience renderer exactly through the new input-free entry point.
+An optional unchanged JUCE AudioPluginDemo mixes external audio and a musical
+synthesizer; its VST3 audio matches an independent native host exactly, with/without
+notes and at several partitions. These source examples and selected binaries do
+not certify arbitrary commercial MIDI effects, AU MIDI output or other platforms.
